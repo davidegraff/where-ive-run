@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Where I've Run</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<!-- vector maps (for the "Roads" style, same OpenMapTiles + MapLibre tech as onthegomap.com) -->
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@5.24.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
+<script>document.write('<script src="data/runs.js?v=' + Date.now() + '"><\/script>');</script>
+<style>
+  :root { --bg:#111418; --panel:#181c22; --line:#2a3039; --text:#e8eaed; --muted:#8b939e; --accent:#ff6a2b; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #app { display:flex; height:100%; }
+  #side { width:310px; flex:none; background:var(--panel); border-right:1px solid var(--line);
+    display:flex; flex-direction:column; overflow-y:auto; }
+  #side > * { flex:none; }
+  #side header { padding:14px 16px 8px; }
+  h1 { font-size:18px; margin:0 0 2px; }
+  .sub { color:var(--muted); font-size:12px; }
+  .stats { display:grid; grid-template-columns:repeat(4, auto); gap:5px; padding:4px 16px 12px; }
+  .stat { background:#1f242b; border-radius:8px; padding:6px 7px; border:1px solid transparent; min-width:0; }
+  .stat b { display:block; font-size:14.5px; letter-spacing:-.01em; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .stat span { color:var(--muted); font-size:11px; }
+  .stat.click { cursor:pointer; user-select:none; transition:border-color .15s; }
+  .stat.click:hover { border-color:var(--accent); }
+  .stat.click span::after { content:" ⇄"; opacity:.6; }
+  .section { padding:9px 16px; border-top:1px solid var(--line); }
+  .section h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:0 0 8px;
+    display:flex; justify-content:space-between; }
+  .section h2 em { font-style:normal; color:var(--text); letter-spacing:0; text-transform:none; font-size:12px; font-weight:600; }
+
+  /* timeline */
+  .timeline { display:flex; align-items:center; gap:10px; }
+  #play { flex:none; width:32px; height:32px; border-radius:50%; border:none; cursor:pointer;
+    background:var(--accent); color:#111; font-size:13px; display:grid; place-items:center; padding:0; }
+  #play:hover { filter:brightness(1.15); }
+  .track { flex:1; position:relative; }
+  input[type=range] { width:100%; margin:0; accent-color:var(--accent); cursor:pointer; }
+  .ticks { position:relative; height:14px; margin-top:2px; }
+  .ticks span { position:absolute; transform:translateX(-50%); font-size:10px; color:var(--muted); white-space:nowrap; }
+
+  /* map style preview box (bottom-left of map, Google Maps style) */
+  .layers { display:flex; align-items:flex-end; gap:8px; margin:0 0 18px 12px !important; }
+  .thumb { position:relative; overflow:hidden; border-radius:8px; cursor:pointer; background:#555; flex:none;
+    width:76px; height:76px; border:2px solid #fff; box-shadow:0 2px 8px rgba(0,0,0,.45); padding:0; }
+  .thumb .tiles { position:absolute; left:0; top:0; width:768px; display:grid; grid-template-columns:repeat(3, 256px);
+    pointer-events:none; }
+  .thumb .tiles img { width:256px; height:256px; display:block; }
+  .thumb .label { position:absolute; left:0; right:0; bottom:0; padding:14px 6px 5px; color:#fff; font:600 11px/1.1 -apple-system, sans-serif;
+    text-align:left; background:linear-gradient(transparent, rgba(0,0,0,.8)); display:flex; align-items:center; gap:4px; }
+  .thumb.main .label svg { flex:none; }
+  .thumb.main { transition: transform .2s cubic-bezier(.2,.8,.2,1), box-shadow .2s; }
+  .thumb.main:hover { transform: translateY(-2px) scale(1.04); box-shadow:0 6px 16px rgba(0,0,0,.5); }
+  .thumb.main:active { transform: scale(.97); }
+
+  /* options row: slides/fades out of the main box; previews pop in one after another */
+  .layers .options { display:flex; gap:6px; padding:6px; background:rgba(24,28,34,.94); border-radius:10px;
+    box-shadow:0 2px 8px rgba(0,0,0,.45); transform-origin:left center;
+    opacity:0; visibility:hidden; pointer-events:none; transform: translateX(-14px) scaleX(.85);
+    clip-path: inset(0 100% 0 0 round 10px);
+    transition: opacity .18s ease .12s, transform .25s cubic-bezier(.4,0,.2,1) .1s,
+                clip-path .25s cubic-bezier(.4,0,.2,1) .1s, visibility 0s linear .35s; }
+  .layers.open .options {
+    opacity:1; visibility:visible; pointer-events:auto; transform:none; clip-path: inset(0 0 0 0 round 10px);
+    transition: opacity .18s ease, transform .32s cubic-bezier(.2,.9,.25,1.15),
+                clip-path .32s cubic-bezier(.2,.8,.2,1), visibility 0s; }
+  .options .thumb { width:62px; height:62px; border-color:transparent; box-shadow:none;
+    opacity:0; transform: translateX(-8px) scale(.9);
+    transition: opacity .15s ease, transform .2s ease, border-color .15s; }
+  .layers.open .options .thumb {
+    opacity:1; transform:none; transition: opacity .25s ease, transform .35s cubic-bezier(.2,.9,.25,1.2), border-color .15s; }
+  .layers.open .options .thumb:nth-child(2), .layers.open .options .thumb:nth-child(2) { transition-delay: .04s, .04s, 0s; }
+  .layers.open .options .thumb:nth-child(3), .layers.open .options .thumb:nth-child(3) { transition-delay: .08s, .08s, 0s; }
+  .layers.open .options .thumb:nth-child(4), .layers.open .options .thumb:nth-child(4) { transition-delay: .12s, .12s, 0s; }
+  .layers.open .options .thumb:nth-child(5), .layers.open .options .thumb:nth-child(5) { transition-delay: .16s, .16s, 0s; }
+  .layers.open .options .thumb:nth-child(6), .layers.open .options .thumb:nth-child(6) { transition-delay: .20s, .20s, 0s; }
+  .layers.open .options .thumb:nth-child(7), .layers.open .options .thumb:nth-child(7) { transition-delay: .24s, .24s, 0s; }
+  .options .thumb:hover { border-color:#fff; }
+  /* only the box itself opens the row; an invisible bridge keeps it open while crossing the gap */
+  .layers { pointer-events:none; gap:0 !important; }
+  .layers .thumb.main { pointer-events:auto; }
+  .layers .options { position:relative; margin-left:8px; }
+  /* bridge over the gap between the box and the row; on .layers itself so the row's clip-path can't cut it off */
+  .layers { position:relative; }
+  .layers::after { content:""; position:absolute; left:70px; bottom:0; width:22px; height:80px; pointer-events:none; }
+  .layers.open::after { pointer-events:auto; }
+  @media (prefers-reduced-motion: reduce) {
+    .layers .options, .options .thumb, .thumb.main { transition: none !important; }
+  }
+  .options .thumb.on { border-color:var(--accent); }
+  .options .thumb .label { font-size:10px; padding:12px 5px 4px; }
+
+  /* activity type chips, grouped by kind */
+  /* activity type chips */
+  .tchips { display:flex; flex-wrap:wrap; gap:5px; }
+  .tchip { position:relative; display:inline-flex; align-items:center; gap:5px; padding:4px 9px 4px 7px; border-radius:999px;
+    border:1px solid var(--line); background:transparent; color:var(--muted); font:12.5px/1.2 -apple-system, sans-serif;
+    cursor:pointer; transition: background .15s, border-color .15s, color .15s; }
+  .tchip:hover { border-color:#4a525e; color:var(--text); }
+  .tchip.on { color:var(--text); border-color:color-mix(in srgb, var(--accent) 65%, transparent);
+    background:color-mix(in srgb, var(--accent) 16%, transparent); }
+  .tchip .ic { font-size:12px; filter:grayscale(1); opacity:.6; transition: filter .15s, opacity .15s; }
+  .tchip.on .ic { filter:none; opacity:1; }
+  .tchip .ct { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .tchip.nogps .nm { text-decoration: underline dotted color-mix(in srgb, var(--muted) 70%, transparent); text-underline-offset:3px; }
+  /* count and "only" share one grid cell, so the slot is always as wide as the wider of the two:
+     hovering swaps which one is visible without changing the chip's width (no reflow) */
+  .tchip .tail { display:inline-grid; justify-items:end; }
+  .tchip .tail > * { grid-area:1 / 1; }
+  .tchip .only { visibility:hidden; font-size:10.5px; font-weight:600; color:var(--accent); }
+  .tchip:hover .only { visibility:visible; }
+  .tchip:hover .ct { visibility:hidden; }
+  .quick { display:flex; gap:2px; letter-spacing:0; text-transform:none; }
+  .quick button { background:none; border:none; border-radius:4px; padding:1px 6px; color:var(--muted);
+    font:600 11px -apple-system, sans-serif; cursor:pointer; }
+  .quick button:hover { color:var(--text); background:#232931; }
+
+  /* colors */
+  .swatches { display:flex; gap:8px; flex-wrap:wrap; }
+  .swatch { width:24px; height:24px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0;
+    outline:none; box-shadow: inset 0 0 0 2px var(--panel); }
+  .swatch.on { border-color:var(--text); }
+  label.toggle { display:flex; align-items:center; gap:5px; font-size:11px; cursor:pointer; letter-spacing:0; text-transform:none; font-weight:600; }
+  label.toggle input { accent-color:var(--accent); }
+
+  /* the whole sidebar scrolls as one; the Cities heading sticks to the top while you scroll its list */
+  #side { overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:#3a414b transparent; }
+  #side > .section.cities { padding:0 8px 10px; }
+  .section.cities h2 { position:sticky; top:0; z-index:1; background:var(--panel); margin:0 -8px 4px; padding:9px 16px 8px;
+    box-shadow:0 1px 0 var(--line); }
+  #places { padding:0; }
+  .place { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 10px; border-radius:6px; cursor:pointer; }
+  .place:hover { background:#232931; }
+  .place .nm { min-width:0; }
+  .place .nm div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .place .nm small { color:var(--muted); font-size:11px; }
+  .place .n { color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; font-size:12px; text-align:right; }
+  .place .bar { height:3px; border-radius:2px; background:var(--accent); opacity:.7; margin-top:3px; }
+  #map { flex:1; background:#0b0d10; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background:var(--panel); color:var(--text); }
+  .leaflet-popup-content b { color:var(--accent); }
+  #empty { position:absolute; inset:0; display:none; align-items:center; justify-content:center; text-align:center;
+    color:var(--muted); z-index:1000; background:var(--bg); padding:40px; }
+  @media (max-width: 700px) { #app { flex-direction:column-reverse; } #side { width:100%; height:48%; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <header>
+      <h1 id="title">Where I've Run</h1>
+      <div class="sub" id="range"></div>
+    </header>
+    <div class="stats">
+      <div class="stat"><b id="sRuns">–</b><span id="sRunsLabel">runs</span></div>
+      <div class="stat click" id="distTile" title="Click to switch km / miles"><b id="sDist">–</b><span id="sDistUnit">km</span></div>
+      <div class="stat"><b id="sHours">–</b><span>hours</span></div>
+      <div class="stat"><b id="sPlaces">–</b><span>cities</span></div>
+    </div>
+    <div class="section">
+      <h2>Timeline <em id="tlDate"></em></h2>
+      <div class="timeline">
+        <button id="play" title="Play from the beginning" aria-label="Play">▶</button>
+        <div class="track">
+          <input type="range" id="tl" min="0" max="1" value="1" step="1" aria-label="Show activities up to this date">
+          <div class="ticks" id="ticks"></div>
+        </div>
+      </div>
+    </div>
+    <div class="section">
+      <h2>Activities <span class="quick"><button id="typesAll">All</button><button id="typesRuns">Runs</button><button id="typesNone">Clear</button></span></h2>
+      <div class="tchips" id="types"></div>
+    </div>
+    <div class="section">
+      <h2>Route color <label class="toggle" title="Glow when zoomed out"><input type="checkbox" id="glow" checked> Glow</label></h2>
+      <div class="swatches" id="swatches"></div>
+    </div>
+    <div class="section cities"><h2>Cities <span>click to fly there</span></h2>
+      <div id="places"></div>
+    </div>
+  </aside>
+  <div id="map"></div>
+</div>
+<div id="empty">
+  <div><h2 style="color:var(--text)">No activity data yet</h2>
+  Import your Strava export with <code>scripts/import_strava_export.py</code>, then reload this page.</div>
+</div>
+
+<script>
+// ---------- data ----------
+function decode(str) {  // Google encoded polyline
+  const pts = []; let i = 0, lat = 0, lng = 0;
+  while (i < str.length) {
+    for (const k of [0, 1]) {
+      let b, shift = 0, res = 0;
+      do { b = str.charCodeAt(i++) - 63; res |= (b & 31) << shift; shift += 5; } while (b >= 32);
+      const d = (res & 1) ? ~(res >> 1) : (res >> 1);
+      if (k === 0) lat += d; else lng += d;
+    }
+    pts.push([lat / 1e5, lng / 1e5]);
+  }
+  return pts;
+}
+const DAY = 86400000;
+const toDate = s => new Date(s.slice(0, 19));
+// ALL = every activity; RUNS = the ones whose type is checked (everything below works on RUNS)
+const ALL = (window.RUNS || []).filter(r => r.date).map(r => {
+  const pts = r.polyline ? decode(r.polyline) : [];
+  return { ...r, type: r.type || "Run", pts, start: pts[0] || r.start || null, t: toDate(r.date).getTime() };
+}).sort((a, b) => a.t - b.t);
+if (!ALL.length) document.getElementById("empty").style.display = "flex";
+const isRunType = t => /run/i.test(t);
+
+// activity type filter; stores the *unchecked* types so new types show up by default
+const hiddenTypes = new Set(JSON.parse(localStorage.getItem("hm_hiddenTypes") || "[]"));
+let RUNS = [], cumDist = [0], cumTime = [0], CITIES = [];
+function rebuildDerived() {
+  RUNS = ALL.filter(r => !hiddenTypes.has(r.type));
+  // prefix sums so the timeline can update stats instantly
+  cumDist = [0]; cumTime = [0];
+  for (const r of RUNS) { cumDist.push(cumDist.at(-1) + r.distance_m); cumTime.push(cumTime.at(-1) + r.moving_s); }
+  // cities (from scripts/add_cities.py)
+  const cityMap = new Map();
+  RUNS.forEach((r, i) => {
+    if (!r.start) return;
+    const key = (r.city || "Unnamed") + "|" + (r.region || "");
+    if (!cityMap.has(key)) cityMap.set(key, { city: r.city || "Unnamed place", region: r.region || "", idx: [] });
+    cityMap.get(key).idx.push(i);  // idx ascending by date
+  });
+  CITIES = [...cityMap.values()];
+}
+rebuildDerived();
+// "runs" when only running types are checked, otherwise "activities"
+const onlyRuns = () => RUNS.length > 0 && RUNS.every(r => isRunType(r.type));
+const noun = n => onlyRuns() ? (n === 1 ? "run" : "runs") : (n === 1 ? "activity" : "activities");
+
+// ---------- settings ----------
+const COLORS = {
+  orange: { line: "#ff6a2b", hi: "#ffd166", grad: { 0.2: "#5b1a0b", 0.45: "#c1370f", 0.7: "#ff6a2b", 1: "#fff1c1" } },
+  blue:   { line: "#3da5ff", hi: "#d4f1ff", grad: { 0.2: "#0b1d4a", 0.45: "#1f5fc1", 0.7: "#3da5ff", 1: "#e6f7ff" } },
+  green:  { line: "#2fe08a", hi: "#e0ffe9", grad: { 0.2: "#06331d", 0.45: "#139a55", 0.7: "#2fe08a", 1: "#eaffef" } },
+  purple: { line: "#a77bff", hi: "#f1e6ff", grad: { 0.2: "#22104a", 0.45: "#6b3fd1", 0.7: "#a77bff", 1: "#f4ecff" } },
+  pink:   { line: "#ff4fa3", hi: "#ffe3f1", grad: { 0.2: "#4a0b2a", 0.45: "#c41e6e", 0.7: "#ff4fa3", 1: "#fff0f7" } },
+  red:    { line: "#ff3b3b", hi: "#ffd9c7", grad: { 0.2: "#4a0b0b", 0.45: "#b81d1d", 0.7: "#ff3b3b", 1: "#fff0e6" } },
+  white:  { line: "#dfe8f2", hi: "#ffffff", grad: { 0.2: "#2a3340", 0.45: "#7b8ba0", 0.7: "#dfe8f2", 1: "#ffffff" } },
+};
+const store = { get: (k, d) => localStorage.getItem("hm_" + k) || d, set: (k, v) => localStorage.setItem("hm_" + k, v) };
+let color = COLORS[store.get("color")] ? store.get("color") : "orange";
+let unit = store.get("unit", "km");
+
+// ---------- map ----------
+const map = L.map("map", { preferCanvas: true, worldCopyJump: true }).setView([20, 0], 2);
+// Map styles: all free Esri tile services (no API key)
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/";
+const tile = (path, o = {}) => ESRI + path + "/MapServer/tile/{z}/{y}/{x}";
+const ESRI_ATTR = "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors";
+const STYLES = {
+  dark:      { label: "Dark",      bg: "#0b0d10", base: ["Canvas/World_Dark_Gray_Base", 16], overlays: [["Canvas/World_Dark_Gray_Reference", 16, 0.8]] },
+  light:     { label: "Light",     bg: "#e9e9e6", base: ["Canvas/World_Light_Gray_Base", 16], overlays: [["Canvas/World_Light_Gray_Reference", 16, 0.9]] },
+  // onthegomap.com-style road map: OpenFreeMap's free "Liberty" vector style (OpenMapTiles data, drawn by MapLibre)
+  roads:     { label: "Roads",     bg: "#f8f4f0", vector: "https://tiles.openfreemap.org/styles/liberty",
+               attr: '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>',
+               thumb: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", base: [null, 19] },
+  // OpenTopoMap: contour lines, hill shading and trails (free; tiles exist up to z17)
+  terrain:   { label: "Terrain",   bg: "#e8e4d8", url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", base: [null, 17],
+               attr: 'Map data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>, SRTM | Style &copy; <a href="https://opentopomap.org" target="_blank">OpenTopoMap</a> (CC-BY-SA)' },
+  satellite: { label: "Satellite", bg: "#000",    base: ["World_Imagery", 19],
+               attr: "Imagery &copy; Esri, Maxar, Earthstar Geographics", imagery: true },
+  hybrid:    { label: "Hybrid",    bg: "#000",    base: ["World_Imagery", 19],
+               overlays: [["Reference/World_Transportation", 19, 0.9], ["Reference/World_Boundaries_and_Places", 19, 1]],
+               attr: "Imagery &copy; Esri, Maxar, Earthstar Geographics", imagery: true },
+};
+map.createPane("labels"); map.getPane("labels").style.zIndex = 650; map.getPane("labels").style.pointerEvents = "none";
+let baseLayers = [];
+let mapStyle = STYLES[localStorage.getItem("hm_style")] ? localStorage.getItem("hm_style") : "dark";
+function applyStyle(name) {
+  mapStyle = name; localStorage.setItem("hm_style", name);
+  baseLayers.forEach(l => map.removeLayer(l));
+  const s = STYLES[name];
+  baseLayers = [s.vector
+    ? L.maplibreGL({ style: s.vector, attribution: s.attr, interactive: false })
+    : L.tileLayer(s.url || tile(s.base[0]), { attribution: s.attr || ESRI_ATTR, maxNativeZoom: s.base[1], maxZoom: 19, subdomains: "abc" })];
+  for (const o of s.overlays || []) baseLayers.push(L.tileLayer(tile(o[0]), { pane: "labels", maxNativeZoom: o[1], maxZoom: 19, opacity: o[2] }));
+  baseLayers.forEach(l => l.addTo(map));
+  document.getElementById("map").style.background = s.bg;
+  if (s.imagery) localStorage.setItem("hm_lastImagery", name); else localStorage.setItem("hm_lastMapStyle", name);
+  if (window.refreshLayersBox) refreshLayersBox();
+}
+const canvas = L.canvas({ padding: 0.5 });
+const lineLayer = L.layerGroup().addTo(map);
+// maxZoom: 0 stops leaflet.heat from rescaling intensity by zoom; we do our own per-zoom counting
+const heat = L.heatLayer([], { radius: 14, blur: 16, maxZoom: 0, max: 1, minOpacity: 0.3, gradient: COLORS[color].grad });
+// leaflet.heat can run a queued redraw after the layer was removed, or while the map has zero size
+// (e.g. a hidden window) — both throw. Skip those redraws; the next real one draws normally.
+{
+  const redraw = heat._redraw;
+  heat._redraw = function () {
+    this._frame = null;
+    if (!this._map || !this._heat) return;
+    const s = this._map.getSize();
+    if (!s.x || !s.y) return;
+    return redraw.call(this);
+  };
+}
+
+// ---------- formatting ----------
+const KM_PER_MI = 1.609344;
+const fmtDate = t => new Date(t).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+const dist = m => unit === "mi" ? m / 1000 / KM_PER_MI : m / 1000;
+function pace(r) {
+  if (!r.distance_m || !r.moving_s) return "";
+  const s = r.moving_s / dist(r.distance_m);
+  return `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")} /${unit}`;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const popup = r => `<b>${esc(r.name || r.type)}</b><br>${esc(r.type)} · ${fmtDate(r.t)}${r.city ? " · " + esc(r.city) : ""}<br>` +
+  `${dist(r.distance_m).toFixed(2)} ${unit}` + (isRunType(r.type) || /walk|hike/i.test(r.type) ? ` · ${pace(r)}` : "") +
+  `<br><a href="https://www.strava.com/activities/${r.id}" target="_blank" style="color:#8ab4f8">Open in Strava</a>`;
+
+// ---------- route lines (created lazily and cached on each activity, added/removed as the timeline moves) ----------
+function lineFor(i) {
+  const r = RUNS[i];
+  if (r._line !== undefined) return r._line;
+  if (r.pts.length < 2) return (r._line = null);
+  const c = COLORS[color];
+  const pl = L.polyline(r.pts, { renderer: canvas, color: c.line, weight: 2, opacity: 0.45 });
+  pl.bindPopup(() => popup(r));
+  pl.on("mouseover", () => pl.setStyle({ color: COLORS[color].hi, weight: 4, opacity: 1 }));
+  pl.on("mouseout", () => pl.setStyle({ color: COLORS[color].line, weight: 2, opacity: 0.45 }));
+  return (r._line = pl);
+}
+let shown = 0;  // RUNS [0, shown) are on the map
+function showCount(n) {
+  while (shown < n) { const l = lineFor(shown++); if (l) lineLayer.addLayer(l); }
+  while (shown > n) { const l = RUNS[--shown]._line; if (l) lineLayer.removeLayer(l); }
+}
+
+// ---------- timeline (spans all activities, so it doesn't jump when filters change) ----------
+const tl = document.getElementById("tl");
+const t0 = ALL.length ? Math.floor(ALL[0].t / DAY) : 0;
+const t1 = ALL.length ? Math.ceil(ALL.at(-1).t / DAY) : 1;
+tl.min = 0; tl.max = t1 - t0; tl.value = tl.max;
+function countUpTo(day) {  // runs with date <= day (binary search)
+  const limit = (t0 + day + 1) * DAY;
+  let lo = 0, hi = RUNS.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (RUNS[m].t < limit) lo = m + 1; else hi = m; }
+  return lo;
+}
+// year ticks
+const ticks = document.getElementById("ticks");
+if (ALL.length) {
+  const y0 = new Date(ALL[0].t).getFullYear(), y1 = new Date(ALL.at(-1).t).getFullYear();
+  const step = (y1 - y0) > 6 ? 2 : 1;
+  for (let y = y0 + 1; y <= y1; y += step) {
+    const d = Math.floor(new Date(y, 0, 1).getTime() / DAY) - t0;
+    const s = document.createElement("span");
+    s.style.left = (100 * d / (t1 - t0)) + "%"; s.textContent = "’" + String(y).slice(2);
+    ticks.append(s);
+  }
+}
+
+// Glow = number of runs through each area. Each run counts once per grid cell (cell = glow radius
+// in screen pixels at the current zoom), so brightness is proportional to run count, not route length.
+const CELL_PX = 14;
+let heatZoom = null, runCells = [], cellCount = new Map(), heatShown = 0, heatMax = 1;
+const cellCenter = new Map();
+function mercCell(lat, lng, z) {
+  const s = 256 * Math.pow(2, z) / CELL_PX;
+  const x = Math.floor((lng + 180) / 360 * s);
+  const sin = Math.sin(lat * Math.PI / 180);
+  const y = Math.floor((0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * s);
+  return x * 1048576 + y;
+}
+function cellLatLng(key, z) {
+  const s = 256 * Math.pow(2, z) / CELL_PX;
+  const x = Math.floor(key / 1048576), y = key % 1048576;
+  const lng = (x + 0.5) / s * 360 - 180;
+  const n = Math.PI - 2 * Math.PI * (y + 0.5) / s;
+  return [180 / Math.PI * Math.atan(Math.sinh(n)), lng];
+}
+function rebuildHeatCells() {
+  heatZoom = Math.min(map.getZoom(), 10);
+  const all = new Map();
+  runCells = RUNS.map(r => {
+    const set = new Set();
+    for (const p of (r.pts.length ? r.pts : (r.start ? [r.start] : []))) set.add(mercCell(p[0], p[1], heatZoom));
+    for (const k of set) all.set(k, (all.get(k) || 0) + 1);
+    return [...set];
+  });
+  // scale against the all-time busiest cell so the glow builds up as the timeline plays
+  heatMax = 1; for (const v of all.values()) if (v > heatMax) heatMax = v;
+  cellCount = new Map(); heatShown = 0; cellCenter.clear();
+}
+let heatTimer = null;
+function updateHeat(n, now) {
+  if (heatZoom === null) rebuildHeatCells();
+  while (heatShown < n) for (const k of runCells[heatShown++]) cellCount.set(k, (cellCount.get(k) || 0) + 1);
+  while (heatShown > n) for (const k of runCells[--heatShown]) { const v = cellCount.get(k) - 1; v ? cellCount.set(k, v) : cellCount.delete(k); }
+  const draw = () => {
+    heatTimer = null;
+    const pts = [];
+    for (const [k, v] of cellCount) {
+      let c = cellCenter.get(k); if (!c) cellCenter.set(k, c = cellLatLng(k, heatZoom));
+      pts.push([c[0], c[1], v]);
+    }
+    if (heat.options.max !== heatMax) heat.setOptions({ max: heatMax });
+    heat.setLatLngs(pts);
+  };
+  if (now) { clearTimeout(heatTimer); draw(); }
+  else if (!heatTimer) heatTimer = setTimeout(draw, 150);
+}
+map.on("zoomend", () => { if (Math.min(map.getZoom(), 10) !== heatZoom) { rebuildHeatCells(); updateHeat(countUpTo(+tl.value), true); } });
+
+let listTimer = null;
+function update(opts = {}) {
+  const n = countUpTo(+tl.value);
+  showCount(n);
+  updateHeat(n, opts.now);
+  document.getElementById("tlDate").textContent = +tl.value >= +tl.max ? "All time" : "through " + fmtDate((t0 + +tl.value) * DAY);
+  document.getElementById("sRuns").textContent = n.toLocaleString();
+  document.getElementById("sRunsLabel").textContent = noun(n);
+  document.getElementById("title").textContent = RUNS.length && !onlyRuns() ? "Where I've Been" : "Where I've Run";
+  document.getElementById("sDist").textContent = Math.round(dist(cumDist[n])).toLocaleString();
+  document.getElementById("sDistUnit").textContent = unit === "mi" ? "miles" : "km";
+  document.getElementById("sHours").textContent = Math.round(cumTime[n] / 3600).toLocaleString();
+  document.getElementById("range").textContent = n ? `${fmtDate(RUNS[0].t)} – ${fmtDate(RUNS[n - 1].t)}` : (RUNS.length ? "Nothing yet at this date" : "No activity types selected");
+  if (opts.now) renderCities(n);
+  else if (!listTimer) listTimer = setTimeout(() => { listTimer = null; renderCities(countUpTo(+tl.value)); }, 120);
+}
+tl.addEventListener("input", () => { stop(); update(); });
+
+// play / pause
+const playBtn = document.getElementById("play");
+let playing = false, raf = null, lastTs = 0;
+const PLAY_SECONDS = 15;
+function frame(ts) {
+  if (!playing) return;
+  const dt = lastTs ? (ts - lastTs) / 1000 : 0; lastTs = ts;
+  const next = Math.min(+tl.max, +tl.value + (+tl.max) * dt / PLAY_SECONDS);
+  tl.value = next; update();
+  if (next >= +tl.max) { stop(); update({ now: true }); return; }
+  raf = requestAnimationFrame(frame);
+}
+function start() {
+  if (+tl.value >= +tl.max) { tl.value = 0; update({ now: true }); }
+  playing = true; lastTs = 0; playBtn.textContent = "❚❚"; playBtn.title = "Pause";
+  raf = requestAnimationFrame(frame);
+}
+function stop() {
+  if (!playing) return;
+  playing = false; cancelAnimationFrame(raf); playBtn.textContent = "▶"; playBtn.title = "Play from the beginning";
+}
+playBtn.onclick = () => playing ? stop() : start();
+document.addEventListener("keydown", e => { if (e.code === "Space" && e.target.tagName !== "INPUT") { e.preventDefault(); playBtn.click(); } });
+
+// ---------- cities list ----------
+function upper(arr, n) { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < n) lo = m + 1; else hi = m; } return lo; }
+function renderCities(n) {
+  const rows = CITIES.map(c => ({ c, k: upper(c.idx, n) })).filter(x => x.k > 0).sort((a, b) => b.k - a.k);
+  document.getElementById("sPlaces").textContent = rows.length.toLocaleString();
+  const list = document.getElementById("places"); list.innerHTML = "";
+  const max = rows.length ? rows[0].k : 1;
+  for (const { c, k } of rows) {
+    const km = c.idx.slice(0, k).reduce((s, i) => s + RUNS[i].distance_m, 0);
+    const row = document.createElement("div"); row.className = "place";
+    row.innerHTML = `<div class="nm"><div></div><small></small><div class="bar"></div></div><div class="n"></div>`;
+    row.querySelector(".nm div").textContent = c.city;
+    row.querySelector("small").textContent = c.region;
+    row.querySelector(".bar").style.width = Math.max(4, 100 * k / max) + "%";
+    row.querySelector(".n").innerHTML = `${k.toLocaleString()} ${noun(k)}<br><small>${Math.round(dist(km)).toLocaleString()} ${unit}</small>`;
+    row.onclick = () => {
+      const pts = c.idx.slice(0, k).flatMap(i => RUNS[i].pts.length ? RUNS[i].pts : [RUNS[i].start]);
+      flyTo(L.latLngBounds(pts).pad(0.1));
+    };
+    list.append(row);
+  }
+}
+
+// ---------- activity type checkboxes ----------
+const TYPE_ICONS = { run: "🏃", ride: "🚴", walk: "🚶", hike: "🥾", swim: "🏊", ski: "⛷️", snowboard: "🏂", kayak: "🛶",
+  canoe: "🛶", row: "🚣", yoga: "🧘", workout: "💪", weight: "🏋️", golf: "⛳", skate: "⛸️", surf: "🏄", climb: "🧗" };
+const typeIcon = t => { const k = Object.keys(TYPE_ICONS).find(k => t.toLowerCase().includes(k)); return k ? TYPE_ICONS[k] : "•"; };
+function applyFilter() {
+  stop();
+  for (let i = 0; i < shown; i++) if (RUNS[i]._line) lineLayer.removeLayer(RUNS[i]._line);
+  shown = 0;
+  rebuildDerived();
+  rebuildHeatCells();
+  localStorage.setItem("hm_hiddenTypes", JSON.stringify([...hiddenTypes]));
+  update({ now: true });
+}
+(function buildTypeFilter() {
+  const stats = new Map();
+  for (const r of ALL) {
+    const c = stats.get(r.type) || { n: 0, gps: 0, m: 0 };
+    c.n++; c.m += r.distance_m; if (r.pts.length > 1) c.gps++;
+    stats.set(r.type, c);
+  }
+  const root = document.getElementById("types");
+  const chips = new Map();  // type -> button
+  const isOn = t => !hiddenTypes.has(t);
+  const set = (t, on) => on ? hiddenTypes.delete(t) : hiddenTypes.add(t);
+  function refresh() {
+    for (const [t, b] of chips) { b.classList.toggle("on", isOn(t)); b.setAttribute("aria-pressed", isOn(t)); }
+  }
+  const changed = () => { refresh(); applyFilter(); };
+  for (const [type, t] of [...stats].sort((a, b) => b[1].n - a[1].n)) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "tchip" + (t.gps ? "" : " nogps");
+    b.innerHTML = `<span class="ic"></span><span class="nm"></span><span class="tail"><span class="ct"></span><span class="only" role="button" title="Show only this">only</span></span>`;
+    b.querySelector(".ic").textContent = typeIcon(type);
+    b.querySelector(".nm").textContent = type;
+    b.querySelector(".ct").textContent = t.n.toLocaleString();
+    b.title = `${t.n.toLocaleString()} ${type.toLowerCase()} · ${Math.round(dist(t.m)).toLocaleString()} ${unit}` +
+      (t.gps === 0 ? "\nNo GPS routes, so nothing on the map (still counted in totals)" : t.gps < t.n ? `\n${t.gps} of ${t.n} have a GPS route` : "");
+    b.onclick = e => {
+      if (e.target.classList.contains("only")) { for (const k of stats.keys()) set(k, k === type); }
+      else set(type, !isOn(type));
+      changed();
+    };
+    chips.set(type, b); root.append(b);
+  }
+  const setAll = pred => { for (const k of stats.keys()) set(k, pred(k)); changed(); };
+  document.getElementById("typesAll").onclick = () => setAll(() => true);
+  document.getElementById("typesNone").onclick = () => setAll(() => false);
+  document.getElementById("typesRuns").onclick = () => setAll(isRunType);
+  refresh();
+})();
+
+// ---------- units ----------
+document.getElementById("distTile").onclick = () => {
+  unit = unit === "km" ? "mi" : "km"; store.set("unit", unit);
+  update({ now: true }); map.closePopup();
+};
+
+// ---------- colors ----------
+const sw = document.getElementById("swatches");
+function applyColor(name) {
+  color = name; store.set("color", name);
+  const c = COLORS[name];
+  document.documentElement.style.setProperty("--accent", c.line);
+  for (const r of ALL) if (r._line) r._line.setStyle({ color: c.line });
+  heat.setOptions({ gradient: c.grad });
+  sw.querySelectorAll(".swatch").forEach(b => b.classList.toggle("on", b.dataset.c === name));
+}
+for (const name of Object.keys(COLORS)) {
+  const b = document.createElement("button");
+  b.className = "swatch"; b.dataset.c = name; b.title = name[0].toUpperCase() + name.slice(1);
+  b.setAttribute("aria-label", b.title + " routes");
+  b.style.background = COLORS[name].line;
+  b.onclick = () => applyColor(name);
+  sw.append(b);
+}
+
+// ---------- glow ----------
+function updateGlow() {
+  const on = document.getElementById("glow").checked && map.getZoom() < 11;
+  if (on && !map.hasLayer(heat)) heat.addTo(map);
+  if (!on && map.hasLayer(heat)) map.removeLayer(heat);
+}
+map.on("zoomend", updateGlow);
+// During a long fly-to, Leaflet stretches the route/glow canvases drawn at the old zoom (up to ~100x),
+// which shows as a solid wash of color. Hide them for the flight and redraw at the destination.
+function flyTo(bounds) {
+  const pane = map.getPane("overlayPane");
+  map.stop();  // end any flight in progress first, so its moveend doesn't unhide this one
+  pane.style.visibility = "hidden";
+  map.once("moveend", () => { pane.style.visibility = ""; });
+  map.flyToBounds(bounds, { duration: 1.2, maxZoom: 15 });
+}
+document.getElementById("glow").onchange = updateGlow;
+
+// ---------- map style preview box (bottom-left) ----------
+// Main box shows a live preview of the style you'd switch to (Satellite, or back to your last map style);
+// hovering opens previews of every style. Previews are real tiles of the current view.
+const LAYERS_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="#fff"><path d="M12 2 1 8l11 6 11-6-11-6zm0 14.2L3.4 11.5 1 12.8 12 19l11-6.2-2.4-1.3L12 16.2zm0 4.6-8.6-4.7L1 17.4 12 23l11-5.6-2.4-1.3L12 20.8z"/></svg>';
+function makeThumb(cls) {
+  const b = document.createElement("button");
+  b.className = "thumb " + cls;
+  b.innerHTML = '<div class="tiles">' + '<img alt="">'.repeat(9) + '</div><span class="label"></span>';
+  return b;
+}
+function paintThumb(b, key) {
+  const s = STYLES[key], size = (b.classList.contains("opt") ? 62 : 76) - 4;  // minus border
+  const z = Math.max(1, Math.min(Math.round(map.getZoom()) - 2, s.base[1]));
+  const c = map.getCenter(), n = Math.pow(2, z);
+  const sin = Math.sin(c.lat * Math.PI / 180);
+  const px = ((((c.lng + 180) / 360) % 1 + 1) % 1) * n * 256;
+  const py = Math.min(Math.max((0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * n * 256, 0), n * 256 - 1);
+  const tx = Math.floor(px / 256), ty = Math.floor(py / 256);
+  const imgs = b.querySelectorAll("img");
+  let i = 0;
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    const x = ((tx + dx) % n + n) % n, y = ty + dy, img = imgs[i++];
+    const src = (y < 0 || y >= n) ? "" : (s.thumb || s.url || tile(s.base[0])).replace("{s}", "abc"[(x + y) % 3]).replace("{z}", z).replace("{y}", y).replace("{x}", x);
+    if (src) { if (img.getAttribute("src") !== src) img.src = src; img.style.visibility = ""; }
+    else img.style.visibility = "hidden";
+  }
+  b.querySelector(".tiles").style.transform =
+    `translate(${size / 2 - (px - (tx - 1) * 256)}px, ${size / 2 - (py - (ty - 1) * 256)}px)`;
+  b.style.background = s.bg;
+}
+const layersCtl = L.control({ position: "bottomleft" });
+let mainThumb, optionThumbs = {};
+layersCtl.onAdd = () => {
+  const box = L.DomUtil.create("div", "layers");
+  L.DomEvent.disableClickPropagation(box); L.DomEvent.disableScrollPropagation(box);
+  mainThumb = makeThumb("main");
+  mainThumb.onclick = () => { applyStyle(mainThumb.dataset.s); box.classList.remove("open"); };
+  const opts = L.DomUtil.create("div", "options", box);
+  box.prepend(mainThumb);
+  for (const key of Object.keys(STYLES)) {
+    const t = makeThumb("opt"); t.dataset.s = key; t.title = STYLES[key].label + " map";
+    t.querySelector(".label").textContent = STYLES[key].label;
+    t.onclick = () => applyStyle(key);
+    opts.append(t); optionThumbs[key] = t;
+  }
+  // touch screens have no hover: long-press the main box to open all styles
+  let pressTimer;
+  mainThumb.addEventListener("touchstart", () => { pressTimer = setTimeout(() => box.classList.add("open"), 450); }, { passive: true });
+  mainThumb.addEventListener("touchend", () => clearTimeout(pressTimer));
+  map.on("click", () => box.classList.remove("open"));
+  return box;
+};
+window.refreshLayersBox = function () {
+  if (!mainThumb) return;
+  // like Google Maps: the main box flips between your last map style and your last imagery style
+  const pick = (k, d) => STYLES[localStorage.getItem(k)] ? localStorage.getItem(k) : d;
+  const target = STYLES[mapStyle].imagery ? pick("hm_lastMapStyle", "dark") : pick("hm_lastImagery", "satellite");
+  mainThumb.dataset.s = target;
+  mainThumb.title = "Switch to " + STYLES[target].label + " (hover for all styles)";
+  mainThumb.querySelector(".label").innerHTML = LAYERS_ICON + STYLES[target].label;
+  paintThumb(mainThumb, target);
+  for (const [key, t] of Object.entries(optionThumbs)) { t.classList.toggle("on", key === mapStyle); }
+};
+layersCtl.addTo(map);
+// option previews are only painted when shown, to avoid loading tiles nobody sees
+// Hover opens the row at once; leaving starts a grace period so a cursor crossing the gap
+// (or cutting diagonally) doesn't collapse it. Re-entering within the grace period cancels the close.
+const CLOSE_DELAY_MS = 350;
+let closeTimer = null;
+const layersBox = mainThumb.parentElement;
+layersBox.addEventListener("mouseenter", () => {
+  clearTimeout(closeTimer);
+  if (!layersBox.classList.contains("open")) for (const [k, t] of Object.entries(optionThumbs)) paintThumb(t, k);
+  layersBox.classList.add("open");
+});
+layersBox.addEventListener("mouseleave", () => {
+  clearTimeout(closeTimer);
+  closeTimer = setTimeout(() => layersBox.classList.remove("open"), CLOSE_DELAY_MS);
+});
+let thumbTimer;
+map.on("moveend", () => { clearTimeout(thumbTimer); thumbTimer = setTimeout(refreshLayersBox, 250); });
+
+// ---------- go ----------
+applyStyle(mapStyle);
+applyColor(color);
+update({ now: true });
+updateGlow();
+const allPts = RUNS.flatMap(r => r.pts.length ? [r.pts[0]] : (r.start ? [r.start] : []));
+if (allPts.length) map.fitBounds(L.latLngBounds(allPts).pad(0.1), { maxZoom: 13 });
+</script>
+</body>
+</html>
