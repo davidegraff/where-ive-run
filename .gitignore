@@ -1,0 +1,11 @@
+# Personal activity data: GPS routes, start locations and the Strava login token.
+# Re-create it locally with scripts/import_strava_export.py (see README).
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
