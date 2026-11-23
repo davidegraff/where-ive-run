@@ -1,6 +1,6 @@
 // Page startup, file drop / picker, and the "Your data" panel. All data comes from the server (api.ts).
 import "./styles.css";
-import type { Activity } from "../shared/model.ts";
+import type { Activity } from "./api-types.ts";
 import { deleteActivities, getActivities, getCities, getImports, runImport, upload } from "./api.ts";
 import { createHeatmap } from "./view/heatmap.ts";
 import { toast } from "./view/status.ts";
@@ -26,8 +26,9 @@ try {
 
 /** Fetch everything from the server and refresh the "Your data" panel. */
 async function load(): Promise<Activity[]> {
-  const { activities, cityCursor: c } = await getActivities();
-  cityCursor = c;
+  const r = await getActivities();
+  cityCursor = r.city_cursor;
+  const activities = r.activities;
   await renderSources(activities);
   return activities;
 }
@@ -83,7 +84,7 @@ async function run(files: File[]) {
     for (const f of files) {
       const r = await upload(f, done => t.set(`Uploading ${f.name}`, mb(sent + done), mb(total)));
       sent += f.size;
-      ids.push(r.uploadId);
+      ids.push(r.upload_id);
     }
     t.set("Reading files…");
     const summaries = await runImport(ids, e => {

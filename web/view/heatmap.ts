@@ -1,8 +1,8 @@
 // The map, timeline, filters and city list. Ported from the original single-file heatmap.html;
 // the difference is that data arrives through setActivities() and can change while the page is open.
 import L from "./leaflet.ts";
-import type { Activity, CityTag, LatLng } from "../../shared/model.ts";
-import { decodePolyline } from "../../shared/polyline.ts";
+import type { Activity, CityTag, LatLng } from "../api-types.ts";
+import { decodePolyline } from "../polyline.ts";
 
 type Run = Activity & { pts: LatLng[]; t: number; _line?: L.Polyline | null };
 type City = { city: string; region: string; idx: number[] };

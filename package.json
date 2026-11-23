@@ -6,16 +6,16 @@
   "scripts": {
     "dev": "node tools/dev.ts",
     "dev:web": "vite",
-    "dev:server": "node --watch-path=server --watch-path=shared server/main.ts",
+    "dev:server": "uv run python -m server --reload",
+    "gen:api": "uv run python -m server.typescript",
     "build": "npm run typecheck && vite build",
-    "start": "node server/main.ts",
-    "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json && tsc -p web/tsconfig.json && tsc -p server/tsconfig.json"
+    "start": "uv run python -m server",
+    "test": "uv run pytest && vitest run",
+    "typecheck": "uv run python -m server.typescript --check && tsc -p tsconfig.json && tsc -p web/tsconfig.json",
+    "lint:py": "uv run mypy"
   },
   "dependencies": {
-    "@garmin/fitsdk": "^21.222.0",
     "@maplibre/maplibre-gl-leaflet": "^0.1.4",
-    "@zip.js/zip.js": "^2.25.0",
     "leaflet": "^1.9.4",
     "leaflet.heat": "^0.2.0",
     "maplibre-gl": "^5.24.1"
@@ -29,6 +29,6 @@
     "vitest": "^5.1.1"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=22"
   }
 }

@@ -1,12 +1,14 @@
 [project]
 name = "where-ive-run"
-version = "0.1.0"
-description = "Interactive heatmap of every activity in a Strava bulk export"
+version = "0.4.0"
+description = "API server for Where I've Run: ingests activity archives and serves them to the map"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.162.5",
     "fitdecode>=0.10", # reads .fit / .fit.gz activity files in the Strava export
     "requests>=2.34.2",
+    "uvicorn>=0.54.0",
 ]
 
 [tool.uv]
@@ -14,6 +16,20 @@ package = false
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.16.2",
     "mypy>=2.4.1",
+    "pytest>=9.2.0",
     "types-requests>=2.33.0.20261030",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.mypy]
+strict = true
+files = ["server", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["fitdecode", "fitdecode.*"]
+ignore_missing_imports = true

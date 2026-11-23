@@ -1,0 +1,36 @@
+"""Server settings, read from environment variables."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class Settings:
+    data_dir: Path = Path("data")
+    """DATA_DIR: holds app.db and uploads/. Git-ignored: it contains everyone's routes."""
+    static_dir: Path | None = Path("dist")
+    """STATIC_DIR: the built page (npm run build), served at /. Not needed in development."""
+    max_upload_mb: int = 8192
+    """MAX_UPLOAD_MB"""
+    geocode: bool = True
+    """GEOCODE=off skips city names (no requests to OpenStreetMap)."""
+    nominatim_user_agent: str = "where-ive-run (self-hosted)"
+    """NOMINATIM_USER_AGENT: identifies this server to Nominatim, as its usage policy requires."""
+    import_processes: int | None = None
+    """IMPORT_PROCESSES: processes used to parse track files (default: one per CPU core; 0 = parse in-thread)."""
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        env = os.environ
+        processes = env.get("IMPORT_PROCESSES")
+        return cls(
+            data_dir=Path(env.get("DATA_DIR", "data")),
+            static_dir=Path(env.get("STATIC_DIR", "dist")),
+            max_upload_mb=int(env.get("MAX_UPLOAD_MB", "8192")),
+            geocode=env.get("GEOCODE", "on").lower() != "off",
+            nominatim_user_agent=env.get("NOMINATIM_USER_AGENT", cls.nominatim_user_agent),
+            import_processes=int(processes) if processes else None,
+        )

@@ -1,7 +1,7 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 
-// Builds the page only (web/). The API server in server/ is plain Node and needs no build step.
+// Builds the page only (web/). The API server in server/ is Python and needs no build step.
 export default defineConfig({
   root: "web",
   base: "./",
@@ -17,5 +17,5 @@ export default defineConfig({
     // In development the page and the API are separate processes; `npm run dev` starts both.
     proxy: { "/api": { target: `http://127.0.0.1:${process.env.API_PORT ?? 8787}`, changeOrigin: false } },
   },
-  test: { root: ".", include: ["tests/**/*.test.ts"] },
+  test: { root: ".", include: ["web/**/*.test.ts"] },
 });

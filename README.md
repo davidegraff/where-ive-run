@@ -22,7 +22,11 @@ Planned: Garmin Connect archive, a linked Strava account, Apple Health.
 
 ## Running it
 
-Requires Node 24 or newer (the server runs its TypeScript directly, with no build step).
+The server is Python ([FastAPI](https://fastapi.tiangolo.com)), managed with [uv](https://docs.astral.sh/uv/). The page is TypeScript, built with Vite, so you need Node 22 or newer too.
+
+```bash
+uv sync
+```
 
 ```bash
 npm install
@@ -32,7 +36,11 @@ npm install
 npm run dev
 ```
 
-Then open http://127.0.0.1:5173. This starts two processes: the API server on port 8787, which restarts when `server/` or `shared/` changes, and Vite's dev server for the page, which forwards `/api` requests to the API server. `npm run dev:server` and `npm run dev:web` start just one of them.
+Then open http://127.0.0.1:5173. This starts two processes:
+- The API server on port 8787, which restarts when anything in `server/` changes. Run it on its own with `npm run dev:server` (`uv run python -m server --reload`).
+- Vite's dev server for the page, which forwards `/api` requests to the API server. Run it on its own with `npm run dev:web`.
+
+While the server is running, its interactive API docs are at http://127.0.0.1:8787/docs.
 
 For production, build the page once, then run the server. It serves the API and the built page from one port:
 
@@ -41,67 +49,86 @@ npm run build
 ```
 
 ```bash
-HOST=0.0.0.0 PORT=8787 npm start
+HOST=0.0.0.0 PORT=8787 uv run python -m server
 ```
 
-Settings are environment variables, listed at the top of [server/main.ts](server/main.ts): `DATA_DIR` (the database and uploads, default `./data`), `MAX_UPLOAD_MB`, `GEOCODE=off`, `NOMINATIM_USER_AGENT`, and others.
+Settings are environment variables, described in [server/settings.py](server/settings.py): `DATA_DIR` (the database and uploads, default `./data`), `MAX_UPLOAD_MB`, `GEOCODE=off`, `NOMINATIM_USER_AGENT`, `IMPORT_PROCESSES`. `HOST` and `PORT` are read in [server/\_\_main\_\_.py](server/__main__.py).
+
+### Tests and checks
 
 ```bash
 npm test
 ```
 
-To check the importer against a real archive and the old Python importer's output:
+That runs the Python tests (`uv run pytest`) and the page's tests (`vitest`). To type-check:
 
 ```bash
-STRAVA_ARCHIVE=~/Downloads/export_12345.zip LEGACY_JSON=data/runs.json npx vitest run tests/archive-compare.test.ts
+uv run mypy
+```
+
+```bash
+npm run typecheck
+```
+
+`npm run typecheck` also checks that [web/api-types.ts](web/api-types.ts) is up to date with the server's models. After changing [server/models.py](server/models.py), regenerate it:
+
+```bash
+npm run gen:api
+```
+
+To check the importer against a real archive and the old command-line importer's output:
+
+```bash
+STRAVA_ARCHIVE=~/Downloads/export_12345.zip LEGACY_JSON=data/runs.json uv run pytest tests/test_archive_compare.py -s
 ```
 
 ## Privacy
 
 - Uploaded files are written to `DATA_DIR/uploads/`, read by the server, and deleted as soon as the import finishes (or after an hour if it never runs).
 - The activities found in them, including every GPS route, are stored in `DATA_DIR/app.db` (SQLite). **Delete all** in the sidebar removes them. `data/` is git-ignored because of this. Keep it out of the repo.
-- To name cities, the server asks OpenStreetMap's [Nominatim](https://nominatim.org) about each area where an activity started, with the location rounded to about 1 km. Nominatim's usage policy allows one request per second for each application, so the whole server shares a single queue. The first import of a few hundred places takes a few minutes. Answers are cached and shared between users, since they hold only place names.
-- **There are no accounts yet.** Everyone who can reach the server sees the same data, so only run it on your own machine or behind something that already restricts access. All requests go through `currentUser()` in [server/auth.ts](server/auth.ts), and every database row is scoped to the id it returns. Adding sign-in means replacing that one function.
+- To name cities, the server asks OpenStreetMap's [Nominatim](https://nominatim.org) about each area where an activity started, with the location rounded to about 1 km. Nominatim's usage policy allows one request per second for each application, so the whole server shares one background thread for lookups. The first import of a few hundred places takes a few minutes. Answers are cached and shared between users, since they hold only place names.
+- **There are no accounts yet.** Everyone who can reach the server sees the same data, so only run it on your own machine or behind something that already restricts access. Every route depends on `current_user()` in [server/auth.py](server/auth.py), and every database row is scoped to the id it returns. Adding sign-in means replacing that one function.
 
 ## How it fits together
 
 ```
- web/ (the page)                         server/ (the API)
- ────────────────                        ─────────────────────────────────────────────────────────────
- drop files ── POST /api/uploads ──────▶ uploads/ on disk
-            ── POST /api/imports ──────▶ worker thread: adapter (Strava archive / track files / …)
-            ◀─ progress (NDJSON stream) ─┘                └─▶ Activity[] ─▶ SQLite
- map        ◀─ GET /api/activities ───── SQLite
- city list  ◀─ GET /api/cities (poll) ── background city lookup (Nominatim, 1 req/s)
+ web/ (the page, TypeScript)              server/ (the API, Python)
+ ───────────────────────────              ──────────────────────────────────────────────────────────────
+ drop files ── POST /api/uploads ───────▶ uploads/ on disk
+            ── POST /api/imports ───────▶ import thread: adapter (Strava archive / track files / …)
+            ◀─ progress (NDJSON stream) ──┘   │  track files parsed in a process pool (all CPU cores)
+                                              └─▶ Activity records ─▶ SQLite
+ map        ◀─ GET /api/activities ────── SQLite
+ city list  ◀─ GET /api/cities (poll) ─── background city lookup (Nominatim, 1 req/s)
 ```
 
-The code is split into three parts, each with its own `tsconfig.json`, so the page can't reach into server code and the server can't use browser APIs:
-
-- **`shared/`** is the contract between the two: the `Activity` shape ([shared/model.ts](shared/model.ts)), every API route and its request/response types ([shared/api.ts](shared/api.ts)), and the polyline encoding.
-- **`server/`** ingests and normalizes data. Every source is converted into the same `Activity` shape. To add a source, write a `SourceAdapter` ([server/ingest/adapters/types.ts](server/ingest/adapters/types.ts)) with a `detect()` that recognises its files and a `read()` that yields activities, then add it to `ADAPTERS` in [server/ingest/adapters/index.ts](server/ingest/adapters/index.ts).
-- **`web/`** is the page. It only talks to the server through [web/api.ts](web/api.ts).
+- **`server/`** ingests and normalizes the data. Every source is converted into the same `Activity` model.
+  - [server/models.py](server/models.py) is the contract with the page: every route, and the shape of everything sent or received.
+  - To add a source, write a class with a `detect()` that recognises its files and a `read()` that yields activities (see `SourceAdapter` in [server/ingest/adapters/base.py](server/ingest/adapters/base.py)), then add it to `ADAPTERS` in [server/ingest/adapters/\_\_init\_\_.py](server/ingest/adapters/__init__.py).
+- **`web/`** is the page. It only talks to the server through [web/api.ts](web/api.ts), using types generated from `server/models.py`.
 
 | Path | What it does |
 | --- | --- |
-| `shared/model.ts`, `shared/api.ts` | The activity shape and the HTTP API's types |
-| `shared/polyline.ts` | Google polyline encode (server) / decode (page) |
-| `server/main.ts` | Entry point and settings |
-| `server/app.ts` | HTTP routes; serves the built page from `dist/` in production |
-| `server/auth.ts` | `currentUser()`: the one place to add sign-in |
-| `server/imports.ts` | Receives uploads, runs import jobs in a worker thread, saves the results |
-| `server/store.ts` | SQLite storage (Node's built-in `node:sqlite`) |
-| `server/geocode.ts` | Groups start points and names their cities, one shared queue |
-| `server/ingest/pipeline.ts`, `entries.ts`, `worker.ts` | Unzips (on demand, so multi-GB archives are fine) and picks an adapter for each upload |
+| `server/models.py` | The API's routes and data shapes (Pydantic models) |
+| `server/main.py` | The FastAPI app: routes, error format; serves the built page from `dist/` in production |
+| `server/__main__.py`, `settings.py` | Starting the server, and its settings |
+| `server/auth.py` | `current_user()`: the one place to add sign-in |
+| `server/imports.py` | Receives uploads, runs each import in a thread, streams its progress, saves the results |
+| `server/store.py` | SQLite storage (Python's built-in `sqlite3`) |
+| `server/geocode.py` | Groups start points and names their cities, one shared background thread |
+| `server/typescript.py` | Writes `web/api-types.ts` from the models |
+| `server/ingest/pipeline.py`, `entries.py` | Opens uploads (zips are read on demand, so multi-GB archives are fine), picks an adapter for each, parses track files in a process pool |
 | `server/ingest/adapters/` | One file per data source |
-| `server/ingest/parsers/` | GPX, TCX, FIT (Garmin's FIT SDK) and CSV readers |
+| `server/ingest/parsers/` | GPX and TCX (`xml.etree`) and FIT ([fitdecode](https://github.com/polyvertex/fitdecode)) readers |
+| `server/ingest/geo.py` | Polyline encoding, route thinning, distances |
 | `web/index.html`, `web/styles.css` | Page layout and styles |
 | `web/main.ts` | Startup, file drop / picker, upload and import progress, "Your data" panel |
-| `web/api.ts` | The page's API client |
+| `web/api.ts`, `web/api-types.ts` | The page's API client, and the generated types |
 | `web/view/heatmap.ts` | Map, timeline, filters, cities list (Leaflet, leaflet.heat; MapLibre loads only for the Roads style) |
-| `tests/` | Parser, pipeline and API tests, plus the optional real-archive comparison |
+| `tests/` | Parser, pipeline and API tests (pytest), plus the optional real-archive comparison |
 | `tools/dev.ts` | Starts the API server and Vite together for `npm run dev` |
 | `scripts/*.py` | The original command-line importers, kept for now as a reference (see below) |
 
 ### The old command-line version
 
-Before the webapp, a Python script turned the archive into `data/runs.js` for a static `heatmap.html`. The scripts are still in `scripts/` (`uv sync`, then `uv run python -I scripts/import_strava_export.py export.zip`), but nothing reads their output any more.
+Before the webapp, a script turned the archive into `data/runs.js` for a static `heatmap.html`. The scripts are still in `scripts/` (`uv run python -I scripts/import_strava_export.py export.zip`), but nothing reads their output any more. The server's Strava importer produces exactly the same activities, which `tests/test_archive_compare.py` checks.

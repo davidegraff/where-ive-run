@@ -1,5 +1,6 @@
-// The page's only way to reach its data: thin wrappers over the server API (types in shared/api.ts).
-import type { ActivitiesResponse, ApiError, CityUpdate, ImportEvent, ImportRecord, SourceSummary, UploadResult } from "../shared/api.ts";
+// The page's only way to reach its data: thin wrappers over the server API.
+// Its types are generated from server/models.py, which also lists the routes.
+import type { ActivitiesResponse, ApiError, CityUpdate, ImportEvent, ImportRecord, SourceSummary, UploadResult } from "./api-types.ts";
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, init);
