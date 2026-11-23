@@ -6,6 +6,8 @@ Usage:  uv run python -I scripts/import_strava_export.py ~/Downloads/export_1234
 Reads the zip in place (nothing is extracted). Uses activities.csv for run
 details and the GPX / TCX / FIT files in activities/ for the routes.
 """
+from __future__ import annotations
+
 import csv
 import gzip
 import io
@@ -15,14 +17,31 @@ import os
 import sys
 import xml.etree.ElementTree as ET
 import zipfile
+from collections.abc import Sequence
 from datetime import datetime
+from typing import Any, TypedDict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
 
+LatLng = tuple[float, float]
 
-def encode_polyline(pts):
-    out, plat, plng = [], 0, 0
+
+class Run(TypedDict):
+    id: str
+    name: str
+    date: str
+    type: str
+    distance_m: float
+    moving_s: float
+    elev_m: float
+    start: list[float] | None
+    polyline: str
+
+
+def encode_polyline(pts: Sequence[LatLng]) -> str:
+    out: list[str] = []
+    plat, plng = 0, 0
     for lat, lng in pts:
         ilat, ilng = round(lat * 1e5), round(lng * 1e5)
         for d in (ilat - plat, ilng - plng):
@@ -35,7 +54,7 @@ def encode_polyline(pts):
     return "".join(out)
 
 
-def thin(pts, min_m=12):
+def thin(pts: list[LatLng], min_m: float = 12) -> list[LatLng]:
     """Drop points closer than min_m metres to the last kept one."""
     if not pts:
         return pts
@@ -51,31 +70,33 @@ def thin(pts, min_m=12):
     return kept
 
 
-def strip_ns(tag):
+def strip_ns(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def parse_gpx(raw):
-    pts = []
+def parse_gpx(raw: bytes) -> list[LatLng]:
+    pts: list[LatLng] = []
     for el in ET.fromstring(raw).iter():
         if strip_ns(el.tag) == "trkpt" and "lat" in el.attrib:
             pts.append((float(el.attrib["lat"]), float(el.attrib["lon"])))
     return pts
 
 
-def parse_tcx(raw):
-    pts = []
+def parse_tcx(raw: bytes) -> list[LatLng]:
+    pts: list[LatLng] = []
     for el in ET.fromstring(raw.strip()).iter():
         if strip_ns(el.tag) == "Position":
             vals = {strip_ns(c.tag): c.text for c in el}
-            if vals.get("LatitudeDegrees") and vals.get("LongitudeDegrees"):
-                pts.append((float(vals["LatitudeDegrees"]), float(vals["LongitudeDegrees"])))
+            lat, lng = vals.get("LatitudeDegrees"), vals.get("LongitudeDegrees")
+            if lat and lng:
+                pts.append((float(lat), float(lng)))
     return pts
 
 
-def parse_fit(raw):
-    import fitdecode
-    pts, k = [], 180 / 2 ** 31
+def parse_fit(raw: bytes) -> list[LatLng]:
+    import fitdecode  # type: ignore[import-untyped]
+    pts: list[LatLng] = []
+    k = 180 / 2 ** 31
     with fitdecode.FitReader(io.BytesIO(raw), check_crc=fitdecode.CrcCheck.DISABLED) as fit:
         for frame in fit:
             if isinstance(frame, fitdecode.FitDataMessage) and frame.name == "record":
@@ -86,7 +107,7 @@ def parse_fit(raw):
     return pts
 
 
-def read_track(zf, name):
+def read_track(zf: zipfile.ZipFile, name: str) -> list[LatLng]:
     raw = zf.read(name)
     low = name.lower()
     if low.endswith(".gz"):
@@ -100,14 +121,14 @@ def read_track(zf, name):
     return []
 
 
-def num(v):
+def num(v: Any) -> float:
     try:
         return float(str(v).replace(",", ""))
     except ValueError:
         return 0.0
 
 
-def parse_date(s):
+def parse_date(s: str) -> str:
     for fmt in ("%b %d, %Y, %I:%M:%S %p", "%d %b %Y, %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
         try:
             return datetime.strptime(s.strip(), fmt).isoformat()
@@ -116,7 +137,7 @@ def parse_date(s):
     return s
 
 
-def main():
+def main() -> None:
     if len(sys.argv) != 2:
         sys.exit("Usage: import_strava_export.py path/to/export.zip")
     zf = zipfile.ZipFile(os.path.expanduser(sys.argv[1]))
@@ -128,7 +149,7 @@ def main():
     rows = list(csv.reader(io.TextIOWrapper(zf.open(csv_name), encoding="utf-8-sig")))
     header, rows = rows[0], rows[1:]
 
-    def col(name, last=False):
+    def col(name: str, last: bool = False) -> int | None:
         idx = [i for i, h in enumerate(header) if h.strip() == name]
         return (idx[-1] if last else idx[0]) if idx else None
 
@@ -141,15 +162,18 @@ def main():
     c_elev = col("Elevation Gain")
 
     names = set(zf.namelist())
-    runs, failed = [], 0
+    runs: list[Run] = []
+    failed = 0
     for r in rows:
-        get = lambda c: r[c] if c is not None and c < len(r) else ""
+        def get(c: int | None, r: list[str] = r) -> str:
+            return r[c] if c is not None and c < len(r) else ""
+
         if not get(c_type):
             continue
         dist = num(get(c_dist_m))
         if c_dist_m == c_dist_km:
             dist *= 1000
-        pts = []
+        pts: list[LatLng] = []
         fname = get(c_file)
         if fname and prefix + fname in names:
             try:
