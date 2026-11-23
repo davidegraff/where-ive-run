@@ -1,6 +1,6 @@
 # Where I've Run
 
-An interactive heatmap of every activity in your Strava account, built from Strava's free bulk export. No Strava subscription or API key is needed.
+An interactive heatmap of every activity you've recorded. Upload your Strava archive (or any GPX / TCX / FIT files) and the server turns it into a map you can explore. You don't need a Strava subscription or API key.
 
 - **Routes and glow:** every GPS route is drawn on the map. When zoomed out, places glow in proportion to how many activities passed through them.
 - **Timeline:** drag the slider, or press ▶, to watch your activities build up from the first one to today.
@@ -11,40 +11,97 @@ An interactive heatmap of every activity in your Strava account, built from Stra
 
 All map backgrounds are free services that need no keys: Esri, OpenFreeMap, OpenTopoMap and OpenStreetMap.
 
-## Setup
+## Supported data
 
-1. **Get your data.** On strava.com go to **Settings → My Account → Download or Delete Your Account → Get Started → Request Your Archive**. Strava emails you a zip, usually within a few hours.
+| Source | How |
+| --- | --- |
+| **Strava archive** | strava.com → **Settings → My Account → Download or Delete Your Account → Get Started → Request Your Archive**. Strava emails you a zip within a few hours. Drop the zip on the page as it is. |
+| **GPX / TCX / FIT files** | From any app or device. Drop the files, or a zip of them. |
 
-2. **Install the dependencies** with [uv](https://docs.astral.sh/uv/) (the one dependency, `fitdecode`, reads `.fit` files):
+Planned: Garmin Connect archive, a linked Strava account, Apple Health.
 
-   ```bash
-   uv sync
-   ```
+## Running it
 
-3. **Import the export.** This reads the zip in place, writes `data/runs.js`, then names the city for each start area using OpenStreetMap's Nominatim. The city lookup runs at about one request per second, with results cached for later imports.
+Requires Node 24 or newer (the server runs its TypeScript directly, with no build step).
 
-   ```bash
-   uv run python -I scripts/import_strava_export.py ~/Downloads/export_12345.zip
-   ```
+```bash
+npm install
+```
 
-4. **Open the map.** Serve the folder locally, then visit http://localhost:8765/heatmap.html:
+```bash
+npm run dev
+```
 
-   ```bash
-   uv run python -m http.server 8765 --bind 127.0.0.1
-   ```
+Then open http://127.0.0.1:5173. This starts two processes: the API server on port 8787, which restarts when `server/` or `shared/` changes, and Vite's dev server for the page, which forwards `/api` requests to the API server. `npm run dev:server` and `npm run dev:web` start just one of them.
 
-To update the map later, request a new archive and run step 3 again.
+For production, build the page once, then run the server. It serves the API and the built page from one port:
+
+```bash
+npm run build
+```
+
+```bash
+HOST=0.0.0.0 PORT=8787 npm start
+```
+
+Settings are environment variables, listed at the top of [server/main.ts](server/main.ts): `DATA_DIR` (the database and uploads, default `./data`), `MAX_UPLOAD_MB`, `GEOCODE=off`, `NOMINATIM_USER_AGENT`, and others.
+
+```bash
+npm test
+```
+
+To check the importer against a real archive and the old Python importer's output:
+
+```bash
+STRAVA_ARCHIVE=~/Downloads/export_12345.zip LEGACY_JSON=data/runs.json npx vitest run tests/archive-compare.test.ts
+```
 
 ## Privacy
 
-`data/` is git-ignored on purpose. It holds every GPS route and start location, which reveal where you live and the routes you run regularly. Keep it out of the repo, especially a public one.
+- Uploaded files are written to `DATA_DIR/uploads/`, read by the server, and deleted as soon as the import finishes (or after an hour if it never runs).
+- The activities found in them, including every GPS route, are stored in `DATA_DIR/app.db` (SQLite). **Delete all** in the sidebar removes them. `data/` is git-ignored because of this. Keep it out of the repo.
+- To name cities, the server asks OpenStreetMap's [Nominatim](https://nominatim.org) about each area where an activity started, with the location rounded to about 1 km. Nominatim's usage policy allows one request per second for each application, so the whole server shares a single queue. The first import of a few hundred places takes a few minutes. Answers are cached and shared between users, since they hold only place names.
+- **There are no accounts yet.** Everyone who can reach the server sees the same data, so only run it on your own machine or behind something that already restricts access. All requests go through `currentUser()` in [server/auth.ts](server/auth.ts), and every database row is scoped to the id it returns. Adding sign-in means replacing that one function.
 
-## Files
+## How it fits together
+
+```
+ web/ (the page)                         server/ (the API)
+ ────────────────                        ─────────────────────────────────────────────────────────────
+ drop files ── POST /api/uploads ──────▶ uploads/ on disk
+            ── POST /api/imports ──────▶ worker thread: adapter (Strava archive / track files / …)
+            ◀─ progress (NDJSON stream) ─┘                └─▶ Activity[] ─▶ SQLite
+ map        ◀─ GET /api/activities ───── SQLite
+ city list  ◀─ GET /api/cities (poll) ── background city lookup (Nominatim, 1 req/s)
+```
+
+The code is split into three parts, each with its own `tsconfig.json`, so the page can't reach into server code and the server can't use browser APIs:
+
+- **`shared/`** is the contract between the two: the `Activity` shape ([shared/model.ts](shared/model.ts)), every API route and its request/response types ([shared/api.ts](shared/api.ts)), and the polyline encoding.
+- **`server/`** ingests and normalizes data. Every source is converted into the same `Activity` shape. To add a source, write a `SourceAdapter` ([server/ingest/adapters/types.ts](server/ingest/adapters/types.ts)) with a `detect()` that recognises its files and a `read()` that yields activities, then add it to `ADAPTERS` in [server/ingest/adapters/index.ts](server/ingest/adapters/index.ts).
+- **`web/`** is the page. It only talks to the server through [web/api.ts](web/api.ts).
 
 | Path | What it does |
 | --- | --- |
-| `pyproject.toml`, `uv.lock` | Python dependencies, managed with uv |
-| `heatmap.html` | The whole app (Leaflet, leaflet.heat, MapLibre for the Roads style) |
-| `scripts/import_strava_export.py` | Strava export zip → `data/runs.js` (GPX, TCX and FIT supported) |
-| `scripts/add_cities.py` | Tags each activity with its starting city (called by the importer) |
-| `scripts/fetch_strava_runs.py` | Alternative importer using the Strava API. Strava now limits API apps to subscribers on some accounts |
+| `shared/model.ts`, `shared/api.ts` | The activity shape and the HTTP API's types |
+| `shared/polyline.ts` | Google polyline encode (server) / decode (page) |
+| `server/main.ts` | Entry point and settings |
+| `server/app.ts` | HTTP routes; serves the built page from `dist/` in production |
+| `server/auth.ts` | `currentUser()`: the one place to add sign-in |
+| `server/imports.ts` | Receives uploads, runs import jobs in a worker thread, saves the results |
+| `server/store.ts` | SQLite storage (Node's built-in `node:sqlite`) |
+| `server/geocode.ts` | Groups start points and names their cities, one shared queue |
+| `server/ingest/pipeline.ts`, `entries.ts`, `worker.ts` | Unzips (on demand, so multi-GB archives are fine) and picks an adapter for each upload |
+| `server/ingest/adapters/` | One file per data source |
+| `server/ingest/parsers/` | GPX, TCX, FIT (Garmin's FIT SDK) and CSV readers |
+| `web/index.html`, `web/styles.css` | Page layout and styles |
+| `web/main.ts` | Startup, file drop / picker, upload and import progress, "Your data" panel |
+| `web/api.ts` | The page's API client |
+| `web/view/heatmap.ts` | Map, timeline, filters, cities list (Leaflet, leaflet.heat; MapLibre loads only for the Roads style) |
+| `tests/` | Parser, pipeline and API tests, plus the optional real-archive comparison |
+| `tools/dev.ts` | Starts the API server and Vite together for `npm run dev` |
+| `scripts/*.py` | The original command-line importers, kept for now as a reference (see below) |
+
+### The old command-line version
+
+Before the webapp, a Python script turned the archive into `data/runs.js` for a static `heatmap.html`. The scripts are still in `scripts/` (`uv sync`, then `uv run python -I scripts/import_strava_export.py export.zip`), but nothing reads their output any more.

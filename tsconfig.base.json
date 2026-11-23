@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    // The server runs .ts files directly with Node, which only strips types: imports must name the .ts
+    // file, and TypeScript-only runtime syntax (enums, parameter properties, namespaces) is not allowed.
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true
+  }
+}

@@ -1,0 +1,9 @@
+// Tooling only (vite.config.ts, tools/). The app itself is checked as two separate projects, so the page
+// can't import server code and the server can't use browser APIs:
+//   web/tsconfig.json     the page          (web/ + shared/)
+//   server/tsconfig.json  the API server    (server/ + shared/ + tests/)
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": { "lib": ["ES2023"], "types": ["node"] },
+  "include": ["vite.config.ts", "tools"]
+}
