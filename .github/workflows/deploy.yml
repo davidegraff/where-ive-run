@@ -1,14 +1,16 @@
 # On every push to main: run the tests and checks, then deploy to Fly.io.
+# On pull requests: only the tests and checks.
 # Needs a FLY_API_TOKEN repository secret (see "Deploying" in README.md).
 name: Deploy
 
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: deploy
+  group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -29,6 +31,7 @@ jobs:
 
   deploy:
     needs: check
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

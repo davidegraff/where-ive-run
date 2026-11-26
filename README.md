@@ -118,10 +118,10 @@ Setting it up the first time:
    fly secrets set NOMINATIM_USER_AGENT="where-ive-run (you@example.com)"
    ```
 
-5. Deploy once by hand. Fly builds the image on its own builders, so you don't need Docker locally:
+5. Deploy once by hand. Fly builds the image on its own builders, so you don't need Docker locally. `--ha=false` keeps it to one machine (Fly starts two by default, and SQLite needs exactly one):
 
    ```bash
-   fly deploy
+   fly deploy --ha=false
    ```
 
 After that, [.github/workflows/deploy.yml](.github/workflows/deploy.yml) runs the tests and checks on every push to `main`, then deploys. To give it access, create a token and save it as the repository secret `FLY_API_TOKEN` (GitHub → Settings → Secrets and variables → Actions):
