@@ -54,7 +54,7 @@ npm run build
 HOST=0.0.0.0 PORT=8787 uv run python -m server
 ```
 
-Settings are environment variables, described in [server/settings.py](server/settings.py): `DATA_DIR` (the database and uploads, default `./data`), `MAX_UPLOAD_MB`, `GEOCODE=off`, `NOMINATIM_USER_AGENT`, `IMPORT_PROCESSES`, `AUTH` (see [Privacy](#privacy)). `HOST` and `PORT` are read in [server/\_\_main\_\_.py](server/__main__.py).
+Settings are environment variables, described in [server/settings.py](server/settings.py): `DATA_DIR` (the database and uploads, default `./data`), `MAX_UPLOAD_MB`, `GEOCODER` (`geonames`, `nominatim` or `off`), `NOMINATIM_USER_AGENT`, `IMPORT_PROCESSES`, `AUTH` (see [Privacy](#privacy)). `HOST` and `PORT` are read in [server/\_\_main\_\_.py](server/__main__.py).
 
 ### Tests and checks
 
@@ -114,7 +114,7 @@ Setting it up the first time:
    fly volumes create data --region iad --size 5
    ```
 
-4. Optional: name your server to Nominatim, as its usage policy asks:
+4. Optional, and only if you set `GEOCODER=nominatim` (the default, GeoNames, needs nothing): name your server to Nominatim, as its usage policy asks:
 
    ```bash
    fly secrets set NOMINATIM_USER_AGENT="where-ive-run (you@example.com)"
@@ -146,7 +146,11 @@ Merging deploys to Fly, so a merged PR is live a minute or two later. [CLAUDE.md
 
 - Uploaded files are written to `DATA_DIR/uploads/`, read by the server, and deleted as soon as the import finishes (or after an hour if it never runs).
 - The activities found in them, including every GPS route, are stored in `DATA_DIR/app.db` (SQLite). **Delete all** in the sidebar removes them. `data/` is git-ignored because of this. Keep it out of the repo.
-- To name cities, the server asks OpenStreetMap's [Nominatim](https://nominatim.org) about each area where an activity started, with the location rounded to about 1 km. Nominatim's usage policy allows one request per second for each application, so the whole server shares one background thread for lookups. The first import of a few hundred places takes a few minutes. Answers are cached and shared between users, since they hold only place names.
+- City names are worked out on the server, from [GeoNames](https://www.geonames.org)' list of every town with 1,000+ people (CC BY 4.0, credited on the page). It's downloaded once, about 11 MB, into `DATA_DIR/geonames/` the first time it's needed, or ahead of time with `uv run python -m server.geonames`. No locations are sent anywhere, and a whole archive is named in well under a second.
+  - Neighbourhoods are never named, only the city they're in (Back Bay is Boston). New York is named by borough (Brooklyn, Queens, Manhattan, The Bronx, Staten Island).
+  - Names come from two sources, kept apart: GeoNames' files exactly as downloaded, and our corrections in [server/geonames-corrections.toml](server/geonames-corrections.toml): entries GeoNames has wrong (Sunrise, Florida is misplaced; Beverly Hills is marked as a neighbourhood) and towns too small for its list (Mount Washington, MA). To fix a name, add an entry there, with why and a source. The server names everyone's activities again on its next start whenever the GeoNames files, the corrections or the naming rules change.
+  - GeoNames has each town's centre, not its boundary, so near a town line it can pick the neighbouring town, and very small towns (under 1,000 people) aren't in it unless added as corrections. [server/geonames.py](server/geonames.py) explains how it chooses. On 1,800 real activities, 95% got the same name as from Nominatim; most of the rest are next-door towns, or places Nominatim names by county.
+  - `GEOCODER=nominatim` uses OpenStreetMap's [Nominatim](https://nominatim.org) instead, which knows real boundaries. It is sent each start area's location rounded to about 1 km, and its usage policy allows one request per second for the whole server, so a first import of a few hundred places takes a few minutes. Not suitable for a server many people use.
 - **Each browser has its own private space.** There are no accounts yet. On a browser's first visit the server gives it a random secret in a cookie, and that browser only ever sees, imports into and deletes its own activities. The database stores a hash of the secret, not the secret itself. The catch is that clearing cookies, using a private window or switching devices starts over empty, and the old data can't be reached again.
 - To run it just for yourself with one shared space, set `AUTH=local`. Activities imported before per-browser spaces existed belong to `local`, so this is also how to see those again.
 - All of this lives in [server/auth.py](server/auth.py). Every route depends on its `current_user()`, and every database row is scoped to the id it returns. Real sign-in (OAuth, passwords, …) can be added there as another `AUTH` scheme without touching the rest of the server.
@@ -161,7 +165,7 @@ Merging deploys to Fly, so a merged PR is live a minute or two later. [CLAUDE.md
             ◀─ progress (NDJSON stream) ──┘   │  track files parsed in a process pool (all CPU cores)
                                               └─▶ Activity records ─▶ SQLite
  map        ◀─ GET /api/activities ────── SQLite
- city list  ◀─ GET /api/cities (poll) ─── background city lookup (Nominatim, 1 req/s)
+ city list  ◀─ GET /api/cities (poll) ─── background city lookup (GeoNames town list, offline)
 ```
 
 - **`server/`** ingests and normalizes the data. Every source is converted into the same `Activity` model.
@@ -177,7 +181,9 @@ Merging deploys to Fly, so a merged PR is live a minute or two later. [CLAUDE.md
 | `server/auth.py` | `current_user()` and the `AUTH` schemes (a private space per browser, or one shared space): the one place to add sign-in |
 | `server/imports.py` | Receives uploads, runs each import in a thread, streams its progress, saves the results |
 | `server/store.py` | SQLite storage (Python's built-in `sqlite3`) |
-| `server/geocode.py` | Groups start points and names their cities, one shared background thread |
+| `server/geocode.py` | The background city lookup, and the Nominatim client |
+| `server/geonames.py` | Offline city names from GeoNames: downloading, loading, choosing the town |
+| `server/geonames-corrections.toml` | Our fixes to GeoNames, and towns it doesn't have |
 | `server/typescript.py` | Writes `web/api-types.ts` from the models |
 | `server/ingest/pipeline.py`, `entries.py` | Opens uploads (zips are read on demand, so multi-GB archives are fine), picks an adapter for each, parses track files in a process pool |
 | `server/ingest/adapters/` | One file per data source |

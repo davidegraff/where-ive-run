@@ -1,0 +1,75 @@
+# Our corrections to GeoNames (https://www.geonames.org).
+#
+# City names come from two sources, kept apart:
+#   1. GeoNames' list of towns, exactly as downloaded, in DATA_DIR/geonames/ (never edited).
+#   2. This file: the entries we've found to be wrong, and towns the list doesn't have.
+# server/geonames.py reads both and applies this file on top. When this file changes, the server
+# re-names everyone's activities on its next start, so editing it is all a correction takes.
+#
+# Each entry says why, and where the right value came from. Where GeoNames itself is wrong, it's
+# also worth fixing it there (anyone can edit geonames.org); once the downloaded list is right, the
+# entry here can be deleted.
+#
+# [[fix]]   Change an existing GeoNames entry, found by its id ("geonameid", the first column of
+#           cities1000.txt). `name` must match GeoNames' name, to catch a mistyped id. Set only the
+#           fields that are wrong:
+#             latitude, longitude   where the town really is
+#             feature_code          "PPL" for a town, "PPLX" for a neighbourhood (never named itself)
+#             population
+#             separate_town = true  a town in its own right, never named after a bigger place around it
+#                                   (for separate cities GeoNames lists as, or makes look like, neighbourhoods)
+#
+# [[add]]   A town GeoNames' list doesn't have (it only lists towns of 1,000 people or more).
+#             name, latitude, longitude, population, country (ISO code), admin1 (state or
+#             equivalent, as GeoNames codes it), admin2 (county code, optional)
+
+# ---------- fixes ----------
+
+[[fix]]
+geonameid = "4174402"
+name = "Sunrise"
+latitude = 26.1667
+longitude = -80.2788
+why = "GeoNames (edited 2026-09-16) puts the city of Sunrise, Florida on Fort Lauderdale's beach, by Sunrise Boulevard, 17 km east of the city, so runs in Fort Lauderdale were named Sunrise."
+source = "OpenStreetMap, relation 117947"
+
+[[fix]]
+geonameid = "5328041"
+name = "Beverly Hills"
+separate_town = true
+why = "A separate city, but GeoNames marks it as a neighbourhood (PPLX) of Los Angeles and gives it no municipality code, so it was named Los Angeles."
+source = "OpenStreetMap, relation 3503615 (administrative town)"
+
+[[fix]]
+geonameid = "5341114"
+name = "Culver City"
+separate_town = true
+why = "A separate city, but GeoNames marks it as a neighbourhood (PPLX) of Los Angeles and gives it no municipality code, so it was named Los Angeles."
+source = "OpenStreetMap, relation 3492137 (administrative town)"
+
+[[fix]]
+geonameid = "5408076"
+name = "West Hollywood"
+separate_town = true
+why = "A separate city, but GeoNames marks it as a neighbourhood (PPLX) of Los Angeles and gives it no municipality code, so it was named Los Angeles."
+source = "OpenStreetMap, relation 3503616 (administrative town)"
+
+[[fix]]
+geonameid = "4673353"
+name = "Bellaire"
+separate_town = true
+why = "A separate city inside Houston, but GeoNames marks it as a neighbourhood (PPLX) and gives it no municipality code, so it was named Houston."
+source = "OpenStreetMap, relation 6586766 (administrative town)"
+
+# ---------- additions ----------
+
+[[add]]
+name = "Mount Washington"
+latitude = 42.0996
+longitude = -73.4540
+population = 160
+country = "US"
+admin1 = "MA"
+admin2 = "003"
+why = "A town of about 160 people in the Berkshires, too small for GeoNames' list, so runs there were named after Sheffield, 8 km away."
+source = "OpenStreetMap, relation 1839557"

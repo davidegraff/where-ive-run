@@ -25,6 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from server import auth
 from server.auth import current_user
 from server.geocode import CityLookup, Lookup, nominatim
+from server.geonames import LazyGeoNames
 from server.imports import Imports
 from server.models import ActivitiesResponse, ApiError, CityUpdate, ImportRecord, ImportRequest, UploadResult
 from server.settings import Settings
@@ -45,9 +46,14 @@ def create_app(settings: Settings | None = None, lookup: Lookup | None = None) -
     # with Python, so it also works on networks that inspect HTTPS with their own certificate.
     truststore.inject_into_ssl()
     store = Store(settings.data_dir / "app.db")
-    if lookup is None and settings.geocode:
+    offline = settings.geocoder == "geonames"
+    if lookup is None and settings.geocoder == "nominatim":
         lookup = nominatim(settings.nominatim_user_agent)
-    cities = CityLookup(store, lookup)
+    data_version = None
+    if lookup is None and offline:
+        geonames = LazyGeoNames(settings.data_dir / "geonames")
+        lookup, data_version = geonames, geonames.version
+    cities = CityLookup(store, lookup, offline=offline, data_version=data_version)
 
     # Parsing track files (FIT especially) is CPU-bound, so it runs in a pool of processes shared by
     # all imports. "spawn" starts clean interpreters, which is safe alongside the server's threads.

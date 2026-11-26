@@ -17,7 +17,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def make_client(tmp_path: Path, scheme: str) -> TestClient:
     settings = Settings(data_dir=tmp_path, static_dir=None, max_upload_mb=1, import_processes=0,
-                        geocode=False, auth=scheme)
+                        geocoder="off", auth=scheme)
     return TestClient(create_app(settings))
 
 

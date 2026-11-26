@@ -122,6 +122,8 @@ label.toggle input { accent-color:var(--accent); }
 /* the whole sidebar scrolls as one; the Cities heading sticks to the top while you scroll its list */
 #side { overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:#3a414b transparent; }
 #side > .section.cities { padding:0 8px 10px; }
+.section.cities .credit { color:var(--muted); font-size:11px; padding:8px 8px 0; }
+.section.cities .credit a { color:inherit; }
 .section.cities h2 { position:sticky; top:0; z-index:1; background:var(--panel); margin:0 -8px 4px; padding:9px 16px 8px;
   box-shadow:0 1px 0 var(--line); }
 #places { padding:0; }

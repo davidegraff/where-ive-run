@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS imports (
     activities INTEGER NOT NULL
 );
 
+-- Small settings the server keeps for itself, e.g. which version of the city data named the activities.
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 -- Reverse-geocode answers keyed by "lat,lng" (3 decimals). Shared by all users: it holds only place names.
 CREATE TABLE IF NOT EXISTS places (
     key     TEXT PRIMARY KEY,
@@ -194,6 +200,21 @@ class Store:
                     "UPDATE activities SET city = ?, region = ?, city_seq = ? WHERE user_id = ? AND key = ?",
                     (place.city, place.region, self._seq, user, key),
                 )
+
+    def clear_all_cities(self) -> int:
+        """Forget every user's city names, so they're all looked up again. Returns how many were cleared.
+        (city_seq keeps counting up, so pages that are open still pick up the new names.)"""
+        with self._tx() as db:
+            return db.execute("UPDATE activities SET city = NULL, region = NULL, city_seq = NULL WHERE city IS NOT NULL").rowcount
+
+    def meta(self, key: str) -> str | None:
+        with self._lock:
+            row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._tx() as db:
+            db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
     def city_cursor(self) -> int:
         """The latest city tag's sequence number. Read it before reading activities."""

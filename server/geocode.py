@@ -1,9 +1,14 @@
-"""Names the city each activity started in, using OpenStreetMap's Nominatim.
+"""Names the city each activity started in, in a background thread; the page picks up names as
+they arrive (GET /api/cities).
 
-Start points within ~3 km are grouped and looked up once; answers are cached in the places table.
-Nominatim's usage policy allows at most 1 request per second *per application*, so the whole server
-has a single background thread doing lookups, shared by all users. A first import of a few hundred
-places takes a few minutes; the page picks up names as they arrive (GET /api/cities).
+There are two ways to look a city up (GEOCODER in settings.py):
+
+- "geonames" (the default): offline, from a downloaded list of towns (see geonames.py). Each
+  activity is named from its own start point, and a whole archive takes well under a second.
+- "nominatim": OpenStreetMap's Nominatim web service, which knows real town boundaries but allows
+  at most 1 request per second *per application*. Start points within ~3 km are grouped and looked
+  up once, answers are cached in the places table, and one thread serves all users. A first import
+  of a few hundred places takes a few minutes.
 """
 
 from __future__ import annotations
@@ -31,8 +36,13 @@ GIVE_UP_AFTER = 3
 probably down, and every remaining place would fail the same way). The next import retries."""
 
 
+CITY_DATA_KEY = "city_data_version"
+"""The meta key recording which version of the city data named the stored activities."""
+
+
 class LookupStopped(Exception):
     pass
+
 
 Lookup = Callable[[LatLng], Place]
 
@@ -102,9 +112,15 @@ class CityLookup:
     A place that fails three times is left untagged. If GIVE_UP_AFTER places fail in a row, the
     lookup stops and `error` says why; the next schedule() tries again."""
 
-    def __init__(self, store: Store, lookup: Lookup | None, gap_s: float = GAP_S, retry_s: float = 5) -> None:
+    def __init__(self, store: Store, lookup: Lookup | None, gap_s: float = GAP_S, retry_s: float = 5,
+                 offline: bool = False, data_version: Callable[[], str] | None = None) -> None:
         self.store, self.lookup = store, lookup
         self.gap_s, self.retry_s = gap_s, retry_s
+        self.offline = offline
+        """True for a local lookup (GeoNames): name every activity on its own, with no pauses."""
+        self.data_version = data_version
+        """For a local lookup: a fingerprint of the data that decides names. When it differs from the
+        one that named the stored activities, they're all named again (see _rename_if_data_changed)."""
         self._wake = threading.Event()
         self._idle = threading.Event()
         self._idle.set()
@@ -146,6 +162,7 @@ class CityLookup:
             if self._stop:
                 break
             try:
+                self._rename_if_data_changed()
                 for user in self.store.users_with_untagged():
                     self._tag_user(user)
             except LookupStopped as e:
@@ -157,7 +174,40 @@ class CityLookup:
             if not self._wake.is_set():  # nothing new was scheduled meanwhile
                 self._idle.set()
 
+    def _rename_if_data_changed(self) -> None:
+        if self.data_version is None:
+            return
+        try:
+            version = self.data_version()
+        except Exception as e:
+            raise LookupStopped(str(e)) from e
+        if self.store.meta(CITY_DATA_KEY) != version:
+            cleared = self.store.clear_all_cities()
+            self.store.set_meta(CITY_DATA_KEY, version)
+            if cleared:
+                log.info("City data changed (version %s): naming %d activities again", version, cleared)
+
     def _tag_user(self, user: str) -> None:
+        if self.offline:
+            self._tag_user_offline(user)
+        else:
+            self._tag_user_online(user)
+
+    def _tag_user_offline(self, user: str) -> None:
+        assert self.lookup is not None
+        by_place: dict[tuple[str, str, str], list[str]] = {}
+        for item in self.store.untagged(user):
+            if self._stop:
+                return
+            try:
+                place = self.lookup(item.start)
+            except Exception as e:
+                raise LookupStopped(str(e)) from e
+            by_place.setdefault((place.city, place.region, place.country), []).append(item.key)
+        for (city, region, country), keys in by_place.items():
+            self.store.tag_cities(user, keys, Place(city, region, country))
+
+    def _tag_user_online(self, user: str) -> None:
         assert self.lookup is not None
         failures_in_a_row = 0
         for group in cluster(self.store.untagged(user)):

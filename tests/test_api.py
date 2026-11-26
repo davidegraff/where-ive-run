@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from server.main import create_app
-from server.models import LatLng
+from server.models import Activity, LatLng
 from server.settings import Settings
 from server.store import Place
 
@@ -36,7 +36,8 @@ def lookup() -> FakeLookup:
 
 @pytest.fixture
 def client(tmp_path: Path, lookup: FakeLookup) -> Iterator[TestClient]:
-    settings = Settings(data_dir=tmp_path, static_dir=None, max_upload_mb=1, import_processes=0)
+    # These tests use the Nominatim path (clustering, cache, pauses), with a fake standing in for it.
+    settings = Settings(data_dir=tmp_path, static_dir=None, max_upload_mb=1, import_processes=0, geocoder="nominatim")
     app = create_app(settings, lookup=lookup)
     app.state.cities.gap_s = 0  # no need to be polite to a fake
     with TestClient(app) as c:
@@ -167,7 +168,7 @@ def test_city_lookup_gives_up_and_says_why(tmp_path: Path) -> None:
     def offline(at: LatLng) -> Place:
         raise ConnectionError("no network")
 
-    settings = Settings(data_dir=tmp_path, static_dir=None, import_processes=0)
+    settings = Settings(data_dir=tmp_path, static_dir=None, import_processes=0, geocoder="nominatim")
     app = create_app(settings, lookup=offline)
     app.state.cities.gap_s = app.state.cities.retry_s = 0
     with TestClient(app) as client:
@@ -202,7 +203,7 @@ def test_delete_all_stops_a_running_import(tmp_path: Path, monkeypatch: pytest.M
         raise AssertionError("the import should have been stopped")
 
     monkeypatch.setattr(imports_module, "run_import", slow_import)
-    settings = Settings(data_dir=tmp_path, static_dir=None, import_processes=0, geocode=False)
+    settings = Settings(data_dir=tmp_path, static_dir=None, import_processes=0, geocoder="off")
     app = create_app(settings)
     store, imports = app.state.store, app.state.imports
     upload = imports_module.Upload("local", "a.gpx", tmp_path / "a.gpx", 0, 1e12)
@@ -221,3 +222,30 @@ def test_delete_all_stops_a_running_import(tmp_path: Path, monkeypatch: pytest.M
     assert "deleted" in events[-1]["message"]
     assert store.activities("local") == []
     assert store.imports("local") == []
+
+
+def test_activities_are_named_again_when_the_city_data_changes(tmp_path: Path) -> None:
+    from server.geocode import CityLookup
+    from server.store import Store
+
+    store = Store(tmp_path / "app.db")
+    store.put_activities("someone", [
+        Activity(key="a", source="track-files", source_id="a", name="Run", date="2024-01-01T00:00:00", type="Run",
+                 distance_m=1, moving_s=1, elev_m=0, start=(42.36, -71.06), polyline=""),
+    ])
+    data = {"version": "v1", "city": "Sheffield"}
+    lookup = CityLookup(store, lambda at: Place(data["city"], "MA, USA", "United States"), offline=True,
+                        data_version=lambda: data["version"])
+
+    def names() -> list[str | None]:
+        lookup.schedule()
+        assert lookup.wait_idle(timeout=10)
+        return [a.city for a in store.activities("someone")]
+
+    assert names() == ["Sheffield"]
+    data["city"] = "Mount Washington"
+    assert names() == ["Sheffield"]  # same data version: already named, left alone
+    data["version"] = "v2"
+    assert names() == ["Mount Washington"]  # the data changed: everything is named again
+    lookup.stop()
+    store.close()
