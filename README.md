@@ -52,7 +52,7 @@ npm run build
 HOST=0.0.0.0 PORT=8787 uv run python -m server
 ```
 
-Settings are environment variables, described in [server/settings.py](server/settings.py): `DATA_DIR` (the database and uploads, default `./data`), `MAX_UPLOAD_MB`, `GEOCODE=off`, `NOMINATIM_USER_AGENT`, `IMPORT_PROCESSES`. `HOST` and `PORT` are read in [server/\_\_main\_\_.py](server/__main__.py).
+Settings are environment variables, described in [server/settings.py](server/settings.py): `DATA_DIR` (the database and uploads, default `./data`), `MAX_UPLOAD_MB`, `GEOCODE=off`, `NOMINATIM_USER_AGENT`, `IMPORT_PROCESSES`, `AUTH` (see [Privacy](#privacy)). `HOST` and `PORT` are read in [server/\_\_main\_\_.py](server/__main__.py).
 
 ### Tests and checks
 
@@ -82,12 +82,62 @@ To check the importer against a real archive and the old command-line importer's
 STRAVA_ARCHIVE=~/Downloads/export_12345.zip LEGACY_JSON=data/runs.json uv run pytest tests/test_archive_compare.py -s
 ```
 
+## Deploying
+
+The [Dockerfile](Dockerfile) builds the page and runs the server in one image. [fly.toml](fly.toml) runs that image on [Fly.io](https://fly.io) as one small machine, with `DATA_DIR` on a persistent volume. It stops when idle and starts again on the next request. There must only ever be one machine, because the database is SQLite.
+
+> **Read [Privacy](#privacy) first.** Anyone who has the URL can use the site. Each browser only sees its own data, but anyone can upload files to your volume.
+
+Setting it up the first time:
+
+1. Install flyctl and sign in:
+
+   ```bash
+   brew install flyctl
+   ```
+
+   ```bash
+   fly auth login
+   ```
+
+2. Create the app without deploying it yet. If the name `where-ive-run` is taken, pick another one and change `app` in [fly.toml](fly.toml) to match:
+
+   ```bash
+   fly apps create where-ive-run
+   ```
+
+3. Create the volume for the database and uploads in the same region as `primary_region`. Strava archives can be a few GB, and uploads are kept on the volume until they've been imported:
+
+   ```bash
+   fly volumes create data --region iad --size 5
+   ```
+
+4. Optional: name your server to Nominatim, as its usage policy asks:
+
+   ```bash
+   fly secrets set NOMINATIM_USER_AGENT="where-ive-run (you@example.com)"
+   ```
+
+5. Deploy once by hand. Fly builds the image on its own builders, so you don't need Docker locally. `--ha=false` keeps it to one machine (Fly starts two by default, and SQLite needs exactly one):
+
+   ```bash
+   fly deploy --ha=false
+   ```
+
+After that, [.github/workflows/deploy.yml](.github/workflows/deploy.yml) runs the tests and checks on every push to `main`, then deploys. To give it access, create a token and save it as the repository secret `FLY_API_TOKEN` (GitHub → Settings → Secrets and variables → Actions):
+
+```bash
+fly tokens create deploy
+```
+
 ## Privacy
 
 - Uploaded files are written to `DATA_DIR/uploads/`, read by the server, and deleted as soon as the import finishes (or after an hour if it never runs).
 - The activities found in them, including every GPS route, are stored in `DATA_DIR/app.db` (SQLite). **Delete all** in the sidebar removes them. `data/` is git-ignored because of this. Keep it out of the repo.
 - To name cities, the server asks OpenStreetMap's [Nominatim](https://nominatim.org) about each area where an activity started, with the location rounded to about 1 km. Nominatim's usage policy allows one request per second for each application, so the whole server shares one background thread for lookups. The first import of a few hundred places takes a few minutes. Answers are cached and shared between users, since they hold only place names.
-- **There are no accounts yet.** Everyone who can reach the server sees the same data, so only run it on your own machine or behind something that already restricts access. Every route depends on `current_user()` in [server/auth.py](server/auth.py), and every database row is scoped to the id it returns. Adding sign-in means replacing that one function.
+- **Each browser has its own private space.** There are no accounts yet. On a browser's first visit the server gives it a random secret in a cookie, and that browser only ever sees, imports into and deletes its own activities. The database stores a hash of the secret, not the secret itself. The catch is that clearing cookies, using a private window or switching devices starts over empty, and the old data can't be reached again.
+- To run it just for yourself with one shared space, set `AUTH=local`. Activities imported before per-browser spaces existed belong to `local`, so this is also how to see those again.
+- All of this lives in [server/auth.py](server/auth.py). Every route depends on its `current_user()`, and every database row is scoped to the id it returns. Real sign-in (OAuth, passwords, …) can be added there as another `AUTH` scheme without touching the rest of the server.
 
 ## How it fits together
 

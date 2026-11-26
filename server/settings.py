@@ -21,6 +21,9 @@ class Settings:
     """NOMINATIM_USER_AGENT: identifies this server to Nominatim, as its usage policy requires."""
     import_processes: int | None = None
     """IMPORT_PROCESSES: processes used to parse track files (default: one per CPU core; 0 = parse in-thread)."""
+    auth: str = "browser"
+    """AUTH: who sees which data. "browser" (each browser has its own private space) or "local"
+    (everyone shares one, for running it just for yourself). See auth.py."""
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -33,4 +36,5 @@ class Settings:
             geocode=env.get("GEOCODE", "on").lower() != "off",
             nominatim_user_agent=env.get("NOMINATIM_USER_AGENT", cls.nominatim_user_agent),
             import_processes=int(processes) if processes else None,
+            auth=env.get("AUTH", cls.auth).lower(),
         )

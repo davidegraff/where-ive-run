@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from server import auth
 from server.auth import current_user
 from server.geocode import CityLookup, Lookup, nominatim
 from server.imports import Imports
@@ -66,6 +67,7 @@ def create_app(settings: Settings | None = None, lookup: Lookup | None = None) -
         store.close()
 
     app = FastAPI(title="Where I've Run", lifespan=lifespan, responses={400: {"model": ApiError}})
+    auth.install(app, settings.auth)
 
     # ---------- routes ----------
 

@@ -1,0 +1,30 @@
+# Fly.io config: one small machine, with the database and uploads on a persistent volume.
+# See "Deploying" in README.md. App names are global on Fly: change this one if it's taken.
+app = "where-ive-run"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DATA_DIR = "/data"
+  # Uploads are written to the volume before importing, so keep this under the volume's size.
+  MAX_UPLOAD_MB = "4096"
+
+# The database is SQLite, so there must only ever be one machine, and it needs this volume.
+[mounts]
+  source = "data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Stop the machine when nobody is using it, and start it again on the next request.
+  # (City names still to be looked up resume on the next start.)
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
