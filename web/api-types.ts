@@ -47,6 +47,8 @@ export interface CityUpdate {
   cursor: number;
   /** Activities still waiting for a city name (0 once the lookup has caught up or stopped). */
   pending: number;
+  /** Why the lookup stopped early (e.g. no connection to OpenStreetMap); it retries after the next import. */
+  error: string | null;
 }
 
 export interface ImportRecord {

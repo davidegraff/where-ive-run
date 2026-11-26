@@ -79,6 +79,8 @@ class CityUpdate(Model):
     """Pass back as ?since= to get only newer tags."""
     pending: int
     """Activities still waiting for a city name (0 once the lookup has caught up or stopped)."""
+    error: str | None = None
+    """Why the lookup stopped early (e.g. no connection to OpenStreetMap); it retries after the next import."""
 
 
 class ImportRecord(Model):

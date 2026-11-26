@@ -6,8 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.162.5",
-    "fitdecode>=0.10", # reads .fit / .fit.gz activity files in the Strava export
+    "fitdecode>=0.10", # used by the old scripts/ importers (the server has its own FIT reader)
     "requests>=2.34.2",
+    "truststore>=0.10.5",
     "uvicorn>=0.54.0",
 ]
 

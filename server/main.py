@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 from urllib.parse import unquote
 
+import truststore
 from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -39,6 +40,9 @@ GZIP_MIN_BYTES = 2048
 def create_app(settings: Settings | None = None, lookup: Lookup | None = None) -> FastAPI:
     """Build the app. Tests pass their own settings and a fake city lookup."""
     settings = settings or Settings.from_env()
+    # Verify HTTPS (to Nominatim) with the operating system's certificates rather than the ones bundled
+    # with Python, so it also works on networks that inspect HTTPS with their own certificate.
+    truststore.inject_into_ssl()
     store = Store(settings.data_dir / "app.db")
     if lookup is None and settings.geocode:
         lookup = nominatim(settings.nominatim_user_agent)
@@ -76,7 +80,8 @@ def create_app(settings: Settings | None = None, lookup: Lookup | None = None) -
 
     @app.delete("/api/activities", status_code=204)
     def delete_activities(user: User) -> None:
-        store.clear(user)
+        """Also stops any import of the user's that is still running."""
+        imports.delete_all(user)
 
     @app.get("/api/imports")
     def get_imports(user: User) -> list[ImportRecord]:
@@ -99,7 +104,7 @@ def create_app(settings: Settings | None = None, lookup: Lookup | None = None) -
     def get_cities(user: User, since: int = 0) -> CityUpdate:
         tags, cursor = store.tags_since(user, since)
         pending = store.count_untagged(user) if cities.active else 0
-        return CityUpdate(tags=tags, cursor=cursor, pending=pending)
+        return CityUpdate(tags=tags, cursor=cursor, pending=pending, error=cities.error)
 
     # ---------- errors: always {"error": "..."} (see ApiError) ----------
 

@@ -26,6 +26,14 @@ RADIUS_KM = 3
 GAP_S = 1.1
 """Pause between Nominatim requests."""
 
+GIVE_UP_AFTER = 3
+"""Stop for now after this many places in a row couldn't be looked up (the network or Nominatim is
+probably down, and every remaining place would fail the same way). The next import retries."""
+
+
+class LookupStopped(Exception):
+    pass
+
 Lookup = Callable[[LatLng], Place]
 
 
@@ -89,8 +97,10 @@ def nominatim(user_agent: str) -> Lookup:
 
 class CityLookup:
     """The background lookup. Call schedule() after an import (and once at startup); the thread
-    works through every user's untagged activities, then waits. Places that fail three times are
-    left untagged and retried the next time schedule() is called."""
+    works through every user's untagged activities, then waits.
+
+    A place that fails three times is left untagged. If GIVE_UP_AFTER places fail in a row, the
+    lookup stops and `error` says why; the next schedule() tries again."""
 
     def __init__(self, store: Store, lookup: Lookup | None, gap_s: float = GAP_S, retry_s: float = 5) -> None:
         self.store, self.lookup = store, lookup
@@ -100,10 +110,13 @@ class CityLookup:
         self._idle.set()
         self._stop = False
         self._thread: threading.Thread | None = None
+        self.error: str | None = None
+        """Why the last run stopped early, or None."""
 
     def schedule(self) -> None:
         if self.lookup is None:
             return
+        self.error = None
         self._idle.clear()
         self._wake.set()
         if self._thread is None:
@@ -135,28 +148,53 @@ class CityLookup:
             try:
                 for user in self.store.users_with_untagged():
                     self._tag_user(user)
-            except Exception:
-                log.exception("City lookup stopped")
+            except LookupStopped as e:
+                self.error = str(e)
+                log.error("City lookup stopped: %s", e)
+            except Exception as e:
+                self.error = "an internal error"
+                log.exception("City lookup stopped: %s", e)
             if not self._wake.is_set():  # nothing new was scheduled meanwhile
                 self._idle.set()
 
     def _tag_user(self, user: str) -> None:
         assert self.lookup is not None
+        failures_in_a_row = 0
         for group in cluster(self.store.untagged(user)):
             if self._stop:
                 return
             key = f"{group.center[0]:.3f},{group.center[1]:.3f}"
             place = self.store.place(key)
             if place is None:
-                for _ in range(3):
+                problem = ""
+                for attempt in range(3):
                     try:
                         place = self.lookup(group.center)
                         break
                     except Exception as e:
-                        log.warning("City lookup failed (%s), retrying", e)
+                        problem = _describe(e)
+                        log.warning("City lookup failed (attempt %d of 3): %s", attempt + 1, problem)
                         time.sleep(self.retry_s)
                 if place:
                     self.store.put_place(key, place)
+                    failures_in_a_row = 0
+                else:
+                    failures_in_a_row += 1
+                    if failures_in_a_row >= GIVE_UP_AFTER:
+                        raise LookupStopped(f"couldn't reach OpenStreetMap ({problem})")
                 time.sleep(self.gap_s)
             if place:
                 self.store.tag_cities(user, [m.key for m in group.members], place)
+
+
+def _describe(e: Exception) -> str:
+    """A short reason for the page, instead of requests' very long exception messages."""
+    if isinstance(e, requests.exceptions.SSLError):
+        return "its HTTPS certificate couldn't be verified"
+    if isinstance(e, requests.exceptions.ConnectionError):
+        return "no connection"
+    if isinstance(e, requests.exceptions.Timeout):
+        return "timed out"
+    if isinstance(e, requests.exceptions.HTTPError) and e.response is not None:
+        return f"HTTP {e.response.status_code}"
+    return str(e) or type(e).__name__

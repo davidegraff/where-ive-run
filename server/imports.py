@@ -40,7 +40,16 @@ class Upload:
 
 
 class ImportCancelled(Exception):
-    """Raised inside the import thread when the page stops listening."""
+    """Raised inside the import thread when the page stops listening, or the user deletes their data."""
+
+
+@dataclass(eq=False)
+class Job:
+    """A running import, so "Delete all" can stop it first."""
+
+    user: str
+    cancelled: threading.Event
+    reason: str = ""
 
 
 class Imports:
@@ -53,7 +62,19 @@ class Imports:
         self.on_imported = on_imported
         """Called after each successful import (starts the city lookup)."""
         self._uploads: dict[str, Upload] = {}
+        self._jobs: set[Job] = set()
         self._lock = threading.Lock()
+        self._saving = threading.Lock()
+        """Held while an import saves a batch, and while deleting, so the two never overlap."""
+
+    def delete_all(self, user: str) -> None:
+        """Stop the user's running imports, then delete their activities and import history.
+        Without stopping them first, an import would carry on saving into the emptied account."""
+        with self._saving:
+            for job in [j for j in self._jobs if j.user == user]:
+                job.reason = "Stopped: all your data was deleted while this import was running."
+                job.cancelled.set()
+            self.store.clear(user)
 
     # ---------- uploads ----------
 
@@ -112,7 +133,8 @@ class Imports:
         If the page disconnects, the generator is closed and the import stops at its next event."""
         loop = asyncio.get_running_loop()
         events: asyncio.Queue[ImportEvent] = asyncio.Queue()
-        cancelled = threading.Event()
+        job = Job(user, threading.Event())
+        cancelled = job.cancelled
 
         def send(event: ImportEvent) -> None:
             try:
@@ -124,7 +146,10 @@ class Imports:
             if cancelled.is_set():
                 raise ImportCancelled
             if isinstance(event, Batch):
-                self.store.put_activities(user, event.activities)
+                with self._saving:
+                    if cancelled.is_set():
+                        raise ImportCancelled
+                    self.store.put_activities(user, event.activities)
             else:
                 send(event)
 
@@ -133,13 +158,17 @@ class Imports:
             try:
                 files = [InputFile(u.name, u.path) for u in uploads]
                 summaries = run_import(files, emit, self.pool)
-                at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                for s in summaries:
-                    self.store.add_import(user, at, s.file, s.source, s.label, s.activities)
+                with self._saving:
+                    if cancelled.is_set():
+                        raise ImportCancelled
+                    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    for s in summaries:
+                        self.store.add_import(user, at, s.file, s.source, s.label, s.activities)
                 self.on_imported()
                 final = DoneEvent(type="done", summaries=summaries)
             except ImportCancelled:
-                return
+                # Nobody is listening if the page went away; after "Delete all", the page shows why.
+                final = ErrorEvent(type="error", message=job.reason or "Import cancelled")
             except ValueError as e:  # nothing recognisable in the upload: a message meant for the user
                 final = ErrorEvent(type="error", message=str(e))
             except Exception:
@@ -148,8 +177,12 @@ class Imports:
             finally:
                 for u in uploads:
                     u.path.unlink(missing_ok=True)
+                with self._lock:
+                    self._jobs.discard(job)
             send(final)
 
+        with self._lock:
+            self._jobs.add(job)
         threading.Thread(target=work, name=f"import-{user}", daemon=True).start()
         try:
             while True:

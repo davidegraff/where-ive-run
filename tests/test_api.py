@@ -161,3 +161,63 @@ def test_generated_typescript_is_up_to_date() -> None:
     from server.typescript import OUT, generate
 
     assert OUT.read_text() == generate(), "web/api-types.ts is stale: run `npm run gen:api`"
+
+
+def test_city_lookup_gives_up_and_says_why(tmp_path: Path) -> None:
+    def offline(at: LatLng) -> Place:
+        raise ConnectionError("no network")
+
+    settings = Settings(data_dir=tmp_path, static_dir=None, import_processes=0)
+    app = create_app(settings, lookup=offline)
+    app.state.cities.gap_s = app.state.cities.retry_s = 0
+    with TestClient(app) as client:
+        import_fixtures(client)  # three places, all of which fail
+        wait_for_cities(client)
+        update = client.get("/api/cities").json()
+        assert update["pending"] == 0
+        assert update["error"] == "couldn't reach OpenStreetMap (no network)"
+        assert all(a["city"] is None for a in client.get("/api/activities").json()["activities"])
+
+
+def test_delete_all_stops_a_running_import(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deleting while an import is still saving must not leave half an import behind."""
+    import asyncio
+    import threading
+
+    from server import imports as imports_module
+    from server.ingest.pipeline import Batch
+    from server.models import Activity, ProgressEvent
+
+    def activity(i: int) -> Activity:
+        return Activity(key=f"track-files:{i}", source="track-files", source_id=str(i), name="Run", date="2024-01-01T00:00:00",
+                        type="Run", distance_m=1, moving_s=1, elev_m=0, start=None, polyline="")
+
+    deleted = threading.Event()
+
+    def slow_import(files: Any, emit: Any, pool: Any) -> Any:
+        emit(Batch([activity(1)]))
+        emit(ProgressEvent(type="progress", file="f", label="l", done=1, total=2))
+        deleted.wait(5)  # the user clicks "Delete all" here
+        emit(Batch([activity(2)]))
+        raise AssertionError("the import should have been stopped")
+
+    monkeypatch.setattr(imports_module, "run_import", slow_import)
+    settings = Settings(data_dir=tmp_path, static_dir=None, import_processes=0, geocode=False)
+    app = create_app(settings)
+    store, imports = app.state.store, app.state.imports
+    upload = imports_module.Upload("local", "a.gpx", tmp_path / "a.gpx", 0, 1e12)
+
+    async def scenario() -> list[dict[str, Any]]:
+        lines = imports.run("local", [upload])
+        first = json.loads(await lines.__anext__())
+        assert first["type"] == "progress"
+        assert len(store.activities("local")) == 1
+        await asyncio.to_thread(imports.delete_all, "local")
+        deleted.set()
+        return [first] + [json.loads(line) async for line in lines]
+
+    events = asyncio.run(scenario())
+    assert events[-1]["type"] == "error"
+    assert "deleted" in events[-1]["message"]
+    assert store.activities("local") == []
+    assert store.imports("local") == []

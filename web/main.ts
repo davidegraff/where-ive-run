@@ -131,6 +131,7 @@ async function followCities() {
       const u = await getCities(cityCursor);
       cityCursor = u.cursor;
       if (u.tags.length) view.updateCities(u.tags);
+      if (u.error) throw new Error(`${u.error}. It will try again after your next import.`);
       if (!u.pending) break;
       most = Math.max(most, u.pending);
       t ??= toast("Naming cities");
@@ -139,8 +140,10 @@ async function followCities() {
     }
     t?.close(1500);
   } catch (e) {
-    t?.note("City lookup stopped: " + (e as Error).message, true);
-    t?.close(10_000);
+    t ??= toast("City names", { closable: true });
+    t.set("City names");
+    t.note("City lookup stopped: " + (e as Error).message, true);
+    t.close(15_000);
   } finally {
     following = false;
   }

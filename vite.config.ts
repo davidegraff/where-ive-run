@@ -15,7 +15,7 @@ export default defineConfig({
     port: 5173,
     host: "127.0.0.1",
     // In development the page and the API are separate processes; `npm run dev` starts both.
-    proxy: { "/api": { target: `http://127.0.0.1:${process.env.API_PORT ?? 8787}`, changeOrigin: false } },
+    proxy: { "/api/": { target: `http://127.0.0.1:${process.env.API_PORT ?? 8787}`, changeOrigin: false } },
   },
   test: { root: ".", include: ["web/**/*.test.ts"] },
 });

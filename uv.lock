@@ -872,6 +872,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "fitdecode" },
     { name = "requests" },
+    { name = "truststore" },
     { name = "uvicorn" },
 ]
 
@@ -888,6 +889,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.162.5" },
     { name = "fitdecode", specifier = ">=0.10" },
     { name = "requests", specifier = ">=2.34.2" },
+    { name = "truststore", specifier = ">=0.10.5" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 
