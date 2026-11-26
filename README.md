@@ -11,6 +11,8 @@ An interactive heatmap of every activity you've recorded. Upload your Strava arc
 
 All map backgrounds are free services that need no keys: Esri, OpenFreeMap, OpenTopoMap and OpenStreetMap.
 
+It's live at **https://where-ive-run.fly.dev/**. Each browser gets its own private map (see [Privacy](#privacy)).
+
 ## Supported data
 
 | Source | How |
@@ -124,11 +126,21 @@ Setting it up the first time:
    fly deploy --ha=false
    ```
 
-After that, [.github/workflows/deploy.yml](.github/workflows/deploy.yml) runs the tests and checks on every push to `main`, then deploys. To give it access, create a token and save it as the repository secret `FLY_API_TOKEN` (GitHub → Settings → Secrets and variables → Actions):
+After that, [.github/workflows/deploy.yml](.github/workflows/deploy.yml) runs the tests and checks on every pull request and every push to `main`. Pushes to `main` are then deployed. To give it access, create a token and save it as the repository secret `FLY_API_TOKEN` (GitHub → Settings → Secrets and variables → Actions). This one only works for this app and lasts a year:
 
 ```bash
-fly tokens create deploy
+fly tokens create deploy --app where-ive-run --expiry 8760h
 ```
+
+## Making changes
+
+Every change goes through a pull request into `main`. Branch from the latest `main`, push the branch, and open a PR. `main` is protected, for admins too:
+- Changes can only arrive through a pull request.
+- The `check` job (type checks, mypy and tests) must pass before merging.
+- Open review comments must be resolved before merging.
+- Force-pushing to `main` and deleting it are blocked.
+
+Merging deploys to Fly, so a merged PR is live a minute or two later. [CLAUDE.md](CLAUDE.md) gives Claude Code the same rule.
 
 ## Privacy
 
@@ -162,21 +174,23 @@ fly tokens create deploy
 | `server/models.py` | The API's routes and data shapes (Pydantic models) |
 | `server/main.py` | The FastAPI app: routes, error format; serves the built page from `dist/` in production |
 | `server/__main__.py`, `settings.py` | Starting the server, and its settings |
-| `server/auth.py` | `current_user()`: the one place to add sign-in |
+| `server/auth.py` | `current_user()` and the `AUTH` schemes (a private space per browser, or one shared space): the one place to add sign-in |
 | `server/imports.py` | Receives uploads, runs each import in a thread, streams its progress, saves the results |
 | `server/store.py` | SQLite storage (Python's built-in `sqlite3`) |
 | `server/geocode.py` | Groups start points and names their cities, one shared background thread |
 | `server/typescript.py` | Writes `web/api-types.ts` from the models |
 | `server/ingest/pipeline.py`, `entries.py` | Opens uploads (zips are read on demand, so multi-GB archives are fine), picks an adapter for each, parses track files in a process pool |
 | `server/ingest/adapters/` | One file per data source |
-| `server/ingest/parsers/` | GPX and TCX (`xml.etree`) and FIT ([fitdecode](https://github.com/polyvertex/fitdecode)) readers |
+| `server/ingest/parsers/` | GPX and TCX (`xml.etree`) readers, and a small FIT reader of our own (`fit.py`, about 50× faster than [fitdecode](https://github.com/polyvertex/fitdecode), which only the old scripts still use) |
 | `server/ingest/geo.py` | Polyline encoding, route thinning, distances |
 | `web/index.html`, `web/styles.css` | Page layout and styles |
 | `web/main.ts` | Startup, file drop / picker, upload and import progress, "Your data" panel |
 | `web/api.ts`, `web/api-types.ts` | The page's API client, and the generated types |
 | `web/view/heatmap.ts` | Map, timeline, filters, cities list (Leaflet, leaflet.heat; MapLibre loads only for the Roads style) |
-| `tests/` | Parser, pipeline and API tests (pytest), plus the optional real-archive comparison |
+| `tests/` | Parser, pipeline, API and per-browser privacy tests (pytest), plus the optional real-archive comparison |
 | `tools/dev.ts` | Starts the API server and Vite together for `npm run dev` |
+| `Dockerfile`, `fly.toml` | The production image, and how Fly.io runs it (see [Deploying](#deploying)) |
+| `.github/workflows/deploy.yml` | Checks on every PR and push; deploys pushes to `main` |
 | `scripts/*.py` | The original command-line importers, kept for now as a reference (see below) |
 
 ### The old command-line version
